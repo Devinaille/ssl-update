@@ -92,7 +92,13 @@ func TestDeploy_FirstTime_Creates(t *testing.T) {
 // TestDeploy_ReusesExistingByDomain: no hint, but list contains a cert
 // whose domains match the main domain → upsert with that id.
 func TestDeploy_ReusesExistingByDomain(t *testing.T) {
-	var postID int
+	var (
+		postID        int
+		postType      int
+		postCrt       string
+		postKey       string
+		hasManual     bool
+	)
 	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
@@ -105,6 +111,18 @@ func TestDeploy_ReusesExistingByDomain(t *testing.T) {
 			_ = jsonUnmarshal(r.Body, &body)
 			if v, ok := body["id"].(float64); ok {
 				postID = int(v)
+			}
+			if v, ok := body["type"].(float64); ok {
+				postType = int(v)
+			}
+			if m, ok := body["manual"].(map[string]any); ok {
+				hasManual = true
+				if c, ok := m["crt"].(string); ok {
+					postCrt = c
+				}
+				if k, ok := m["key"].(string); ok {
+					postKey = k
+				}
 			}
 			w.Write([]byte(`{"data":5,"err":null}`))
 		}
@@ -123,6 +141,22 @@ func TestDeploy_ReusesExistingByDomain(t *testing.T) {
 	}
 	if res.CertID != "5" {
 		t.Errorf("CertID = %q, want 5", res.CertID)
+	}
+	// Body format must match what the WAF OPEN API actually accepts
+	// (community-verified: type=2, manual={crt, key}). Sending type=1
+	// returns HTTP 500 "Error occurred when extracting params" on
+	// recent WAF versions.
+	if postType != 2 {
+		t.Errorf("body type=%d, want 2 (WAF rejects type=1 with 500)", postType)
+	}
+	if !hasManual {
+		t.Error("body missing \"manual\" sub-object (must contain {crt, key})")
+	}
+	if postCrt != "c" {
+		t.Errorf("body manual.crt=%q, want %q", postCrt, "c")
+	}
+	if postKey != "k" {
+		t.Errorf("body manual.key=%q, want %q", postKey, "k")
 	}
 }
 
@@ -180,8 +214,8 @@ func TestValidate_401ReturnsAuthError(t *testing.T) {
 
 func TestValidate_200OK(t *testing.T) {
 	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("API-TOKEN"); got != "tok" {
-			t.Errorf("API-TOKEN = %q, want tok", got)
+		if got := r.Header.Get("X-SLCE-API-TOKEN"); got != "tok" {
+			t.Errorf("X-SLCE-API-TOKEN = %q, want tok", got)
 		}
 		if r.URL.Path != "/api/open/cert" {
 			t.Errorf("path = %q, want /api/open/cert", r.URL.Path)
@@ -262,6 +296,30 @@ func newHostnameOnlyTLSServer(t *testing.T, hostname string, handler http.Handle
 	}
 	ts.StartTLS()
 	return ts
+}
+
+// Regression test: the WAF middleware requires the literal header
+// `X-SLCE-API-TOKEN`. Earlier code (and the WAF's own swagger) used the
+// placeholder name "API-TOKEN", which the WAF silently rejected with 401.
+// This test locks in the correct header name so future refactors don't
+// regress to the wrong one.
+func TestSetAuth_SendsCorrectHeaderName(t *testing.T) {
+	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Must have correct header.
+		if got := r.Header.Get("X-SLCE-API-TOKEN"); got != "tok" {
+			t.Errorf("X-SLCE-API-TOKEN = %q, want tok (this is the WAF-required header)", got)
+		}
+		// Must NOT have the wrong header (otherwise we might be sending
+		// both and just happening to pass via the right one).
+		if got := r.Header.Get("API-TOKEN"); got != "" {
+			t.Errorf("must not send wrong header API-TOKEN (WAF middleware ignores it and returns 401), got %q", got)
+		}
+		w.Write([]byte(`{"data":{"nodes":[],"total":0},"err":null}`))
+	})
+	defer ts.Close()
+	if err := s.Validate(context.Background()); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
 }
 
 // Regression test: verify_tls: false must let us connect to a cert that

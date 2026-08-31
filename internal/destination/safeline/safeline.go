@@ -3,7 +3,12 @@
 //
 // API reference: the WAF's own swagger (mgt API v2) — basePath /api,
 // cert endpoints under /open/cert (tag ssl_cert), authenticated with the
-// API-TOKEN header (generated in the console "个人中心 → OPEN API").
+// X-SLCE-API-TOKEN header (generated in the console "个人中心 → OPEN API").
+//
+// Note: earlier docs and the WAF swagger itself use "API-TOKEN" as a
+// placeholder name, but the WAF's HTTP middleware (per official docs at
+// help.waf-ce.chaitin.cn) actually requires the literal header
+// `X-SLCE-API-TOKEN`. Sending `API-TOKEN` returns 401.
 package safeline
 
 import (
@@ -29,10 +34,20 @@ import (
 
 const TypeName = "safeline"
 
-// certTypeManualUpload matches this WAF version's cert library type enum
-// (1 = 手动上传). If a deployment shows a different cert type on the WAF,
-// try 2 (社区版旧版脚本用 2).
-const certTypeManualUpload = 1
+// certTypeManualUpload matches the WAF's cert library type enum.
+//
+// History: the WAF swagger marks type=1 as the manual-upload enum, but
+// in practice all working community integrations (yojigen.cn, GitHub
+// discussion #1148, knowsafe tutorial) send type=2. Sending type=1 to
+// recent WAF versions returns HTTP 500 with
+// "Error occurred when extracting params" (the WAF middleware can't bind
+// the value to its known type enum). 2 is the value the WAF actually
+// accepts for certs uploaded via the OPEN API.
+//
+// If you find a WAF version that requires a different value, change this
+// constant — but verify with a real deploy first, since the WAF's error
+// message for a wrong type is misleading.
+const certTypeManualUpload = 2
 
 func init() {
 	destination.Register(TypeName, New)
@@ -240,7 +255,7 @@ func (s *Safeline) url(p string) (string, error) {
 }
 
 func (s *Safeline) setAuth(req *http.Request) {
-	req.Header.Set("API-TOKEN", s.cfg.APIToken)
+	req.Header.Set("X-SLCE-API-TOKEN", s.cfg.APIToken)
 	req.Header.Set("Content-Type", "application/json")
 }
 

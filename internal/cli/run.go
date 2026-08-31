@@ -71,6 +71,14 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 
 	// Read cert.
 	certPath, keyPath, domain := resolveCertSource(cfg.Cert)
+	if certPath == "" || keyPath == "" {
+		hint := "set cert.cert_path and cert.key_path in config.yaml, " +
+			"or set LE_CERT_PATH and LE_KEY_PATH env vars " +
+			"(acme.sh sets these automatically when run as --reloadcmd)"
+		return StartupError("cert", fmt.Errorf(
+			"cert path empty (cert_path=%q, key_path=%q, domain=%q) — %s",
+			certPath, keyPath, domain, hint))
+	}
 	bundle, err := cert.ReadBundle(certPath, keyPath, nil, domain)
 	if err != nil {
 		return StartupError("cert", err)
