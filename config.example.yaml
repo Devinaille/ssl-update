@@ -1,0 +1,60 @@
+# ssl-update example config
+#
+# This file documents all supported fields. Copy to /etc/ssl-update/config.yaml
+# and edit credentials. File MUST be mode 0600; never commit real secrets.
+
+# ---------------------------------------------------------------------------
+# Cert source — fields here override acme.sh's reloadcmd environment variables.
+# Leave empty to use env vars (LE_CERT_PATH, LE_KEY_PATH, Le_DomainMain).
+# ---------------------------------------------------------------------------
+cert:
+  cert_path: ""          # full chain PEM path; default = $LE_CERT_PATH
+  key_path: ""           # private key PEM path; default = $LE_KEY_PATH
+  domain: ""             # main domain (CN); default = $Le_DomainMain
+
+# ---------------------------------------------------------------------------
+# State file — records last-deployed cert id per (destination, cert_name).
+# ---------------------------------------------------------------------------
+state:
+  path: ~/.local/share/ssl-update/state.json
+
+# ---------------------------------------------------------------------------
+# Log — default is local file. Set file to "" for stdout/stderr.
+# ---------------------------------------------------------------------------
+log:
+  level: info            # debug | info | warn | error
+  format: text           # text | json
+  file: /var/log/ssl-update/ssl-update.log
+
+# ---------------------------------------------------------------------------
+# Max parallel destination deploys.
+# ---------------------------------------------------------------------------
+concurrency: 5
+
+# ---------------------------------------------------------------------------
+# Destinations — pushed in parallel. required: true means a failure here
+# makes the whole run exit 1.
+# ---------------------------------------------------------------------------
+destinations:
+
+  # ----- Safeline (长亭雷池) WAF Community Edition -----
+  - name: prod-safeline
+    type: safeline
+    required: true
+    config:
+      api_url: https://10.0.0.5:9443    # WAF console URL (port 9443 by default)
+      api_token: REPLACE_ME             # WAF console: 个人中心 → OPEN API → 添加
+      cert_name: ""                     # empty = auto from main domain (e.g. *.a.com -> wildcard-a-com)
+      verify_tls: true                  # set false for self-signed
+
+  # ----- Aliyun Edge Security Acceleration (ESA) -----
+  - name: prod-esa
+    type: aliyun_esa
+    required: true
+    config:
+      access_key_id: REPLACE_ME
+      access_key_secret: REPLACE_ME
+      region: cn-hangzhou               # cn-hangzhou (中国站) | ap-southeast-1 (国际站)
+      site_id: 1234567890123            # ESA 站点 ID (调用 ListSites 获取)
+      cert_name: ""                     # empty = auto
+      endpoint: esa.aliyuncs.com        # default OK for both 中国/国际

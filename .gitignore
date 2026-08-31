@@ -1,13 +1,16 @@
 # Build artifacts
 /ssl-update
 /ssl-update.exe
+/ssl-update-new.exe
 *.test
 *.out
 
 # Local config (never commit)
 config.yaml
-*.local.yaml
-config.*.yaml
+config.local.yaml
+config.*.local.yaml
+# But the example MUST be committed:
+!config.example.yaml
 
 # Editor / IDE
 .vscode/
