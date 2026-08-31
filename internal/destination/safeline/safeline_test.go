@@ -8,6 +8,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -41,21 +43,27 @@ func TestNew_RequiresAPIToken(t *testing.T) {
 	}
 }
 
-func TestDeploy_FirstTime_UploadsAndReturnsID(t *testing.T) {
+// TestDeploy_FirstTime_Creates: no hint + no existing cert by domain →
+// GET list (empty) → POST upsert without id → returns id from response.
+func TestDeploy_FirstTime_Creates(t *testing.T) {
 	var (
-		sawUpload bool
-		sawList   bool
+		sawList bool
+		sawPost bool
 	)
 	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/CertAPI":
+		if r.URL.Path != "/api/open/cert" {
+			t.Errorf("unexpected path %q, want /api/open/cert", r.URL.Path)
+		}
+		switch r.Method {
+		case "GET":
 			sawList = true
-			w.Write([]byte(`{"data":{"nodes":[]},"err":null}`))
-		case "/api/UploadSSLCertAPI":
-			sawUpload = true
-			w.Write([]byte(`{"data":{"id":42},"err":null}`))
+			w.Write([]byte(`{"data":{"nodes":[],"total":0},"err":null}`))
+		case "POST":
+			sawPost = true
+			// body must NOT contain an id (create)
+			w.Write([]byte(`{"data":42,"err":null}`))
 		default:
-			w.WriteHeader(404)
+			t.Errorf("unexpected method %s", r.Method)
 		}
 	})
 	defer ts.Close()
@@ -67,11 +75,11 @@ func TestDeploy_FirstTime_UploadsAndReturnsID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	if !sawUpload {
-		t.Error("expected POST /api/UploadSSLCertAPI on first deploy")
+	if !sawList {
+		t.Error("expected GET list on first deploy (find by domain)")
 	}
-	if sawList {
-		t.Error("did not expect list call on first deploy")
+	if !sawPost {
+		t.Error("expected POST upsert to create the cert")
 	}
 	if res.CertID != "42" {
 		t.Errorf("CertID = %q, want 42", res.CertID)
@@ -81,15 +89,63 @@ func TestDeploy_FirstTime_UploadsAndReturnsID(t *testing.T) {
 	}
 }
 
-func TestDeploy_WithHint_UpdatesByID(t *testing.T) {
-	var sawUpdate bool
+// TestDeploy_ReusesExistingByDomain: no hint, but list contains a cert
+// whose domains match the main domain → upsert with that id.
+func TestDeploy_ReusesExistingByDomain(t *testing.T) {
+	var postID int
 	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/open/cert/7" && r.Method == "PUT" {
-			sawUpdate = true
-			w.Write([]byte(`{"err":null}`))
-			return
+		switch r.Method {
+		case "GET":
+			w.Write([]byte(`{"data":{"nodes":[
+				{"id":5,"domains":["*.a.com","a.com"]},
+				{"id":9,"domains":["*.b.com"]}
+			],"total":2},"err":null}`))
+		case "POST":
+			var body map[string]any
+			_ = jsonUnmarshal(r.Body, &body)
+			if v, ok := body["id"].(float64); ok {
+				postID = int(v)
+			}
+			w.Write([]byte(`{"data":5,"err":null}`))
 		}
-		w.WriteHeader(404)
+	})
+	defer ts.Close()
+	res, err := s.Deploy(context.Background(), cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if postID != 5 {
+		t.Errorf("upsert used id %d, want 5 (matched existing cert by domain)", postID)
+	}
+	if res.CertID != "5" {
+		t.Errorf("CertID = %q, want 5", res.CertID)
+	}
+}
+
+// TestDeploy_WithHint_UpdatesInPlace: hint "7" → POST upsert with id=7,
+// no list call.
+func TestDeploy_WithHint_UpdatesInPlace(t *testing.T) {
+	var (
+		sawList bool
+		postID  int
+	)
+	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			sawList = true
+			t.Error("should not list when hint is present")
+		case "POST":
+			var body map[string]any
+			_ = jsonUnmarshal(r.Body, &body)
+			if v, ok := body["id"].(float64); ok {
+				postID = int(v)
+			}
+			w.Write([]byte(`{"data":7,"err":null}`))
+		}
 	})
 	defer ts.Close()
 	res, err := s.Deploy(context.Background(), cert.CertBundle{
@@ -100,8 +156,11 @@ func TestDeploy_WithHint_UpdatesByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	if !sawUpdate {
-		t.Error("expected PUT /api/open/cert/7 when hint present")
+	if sawList {
+		t.Error("list should not be called when hint present")
+	}
+	if postID != 7 {
+		t.Errorf("upsert used id %d, want 7", postID)
 	}
 	if res.CertID != "7" {
 		t.Errorf("CertID = %q, want 7", res.CertID)
@@ -124,7 +183,10 @@ func TestValidate_200OK(t *testing.T) {
 		if got := r.Header.Get("API-TOKEN"); got != "tok" {
 			t.Errorf("API-TOKEN = %q, want tok", got)
 		}
-		w.Write([]byte(`{"data":{"nodes":[]},"err":null}`))
+		if r.URL.Path != "/api/open/cert" {
+			t.Errorf("path = %q, want /api/open/cert", r.URL.Path)
+		}
+		w.Write([]byte(`{"data":{"nodes":[],"total":0},"err":null}`))
 	})
 	defer ts.Close()
 	if err := s.Validate(context.Background()); err != nil {
@@ -144,6 +206,15 @@ func TestCertName_SanitizeDefault(t *testing.T) {
 	if got := s.CertName(cert.CertBundle{MainDomain: "*.a.com"}); got != "wildcard-a-com" {
 		t.Errorf("CertName = %q, want wildcard-a-com", got)
 	}
+}
+
+func jsonUnmarshal(body io.ReadCloser, v any) error {
+	defer body.Close()
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, v)
 }
 
 // generateHostnameOnlyCert makes a self-signed cert whose only SAN is a
@@ -198,7 +269,7 @@ func newHostnameOnlyTLSServer(t *testing.T, hostname string, handler http.Handle
 // accepted in config but never applied to http.Client.Transport.)
 func TestNew_VerifyTLS_False_SkipsHostnameCertVerify(t *testing.T) {
 	ts := newHostnameOnlyTLSServer(t, "safeline.example", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"data":{"nodes":[]},"err":null}`))
+		w.Write([]byte(`{"data":{"nodes":[],"total":0},"err":null}`))
 	})
 	defer ts.Close()
 
