@@ -1,0 +1,16 @@
+# Build artifacts
+/ssl-update
+/ssl-update.exe
+*.test
+*.out
+
+# Local config (never commit)
+config.yaml
+*.local.yaml
+config.*.yaml
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
