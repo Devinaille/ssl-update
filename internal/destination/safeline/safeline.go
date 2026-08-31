@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -31,13 +32,23 @@ type Config struct {
 	APIURL    string `mapstructure:"api_url"`
 	APIToken  string `mapstructure:"api_token"`
 	CertName  string `mapstructure:"cert_name"`
-	VerifyTLS bool   `mapstructure:"verify_tls"`
+	VerifyTLS *bool  `mapstructure:"verify_tls"`
 }
 
 type Safeline struct {
 	name string
 	cfg  Config
 	hc   *http.Client
+}
+
+// shouldVerify returns whether TLS cert verification should be performed.
+// Default is true (verify) for safety. Set verify_tls: false in config to
+// skip verification (e.g. for self-signed internal CAs).
+func (c Config) shouldVerify() bool {
+	if c.VerifyTLS == nil {
+		return true
+	}
+	return *c.VerifyTLS
 }
 
 func New(name string, raw map[string]any) (destination.Destination, error) {
@@ -51,10 +62,18 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 	if c.APIToken == "" {
 		return nil, fmt.Errorf("%w: safeline: api_token required", destination.ErrInvalidConfig)
 	}
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: !c.shouldVerify(),
+		},
+	}
 	return &Safeline{
 		name: name,
 		cfg:  c,
-		hc:   &http.Client{Timeout: 30 * time.Second},
+		hc: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: transport,
+		},
 	}, nil
 }
 
