@@ -1,7 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"ssl-update/internal/cli"
+)
 
 func main() {
-	fmt.Println("ssl-update (scaffold)")
+	if err := cli.NewRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
 }
