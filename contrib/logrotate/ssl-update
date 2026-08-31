@@ -1,0 +1,15 @@
+/var/log/ssl-update/ssl-update.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root adm
+    dateext
+    sharedscripts
+    postrotate
+        # ssl-update is short-lived; no daemon to signal
+        true
+    endscript
+}
