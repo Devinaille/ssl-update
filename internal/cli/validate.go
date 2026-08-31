@@ -30,12 +30,14 @@ func runValidate(ctx context.Context, cfgPath string, timeout time.Duration) err
 	if err != nil {
 		return StartupError("config", err)
 	}
-	bad := 0
+	requiredBad := 0
 	for _, d := range cfg.Destinations {
 		dest, err := destination.Create(d.Type, d.Name, d.Config)
 		if err != nil {
 			fmt.Printf("[FAIL] %s (%s): %v\n", d.Name, d.Type, err)
-			bad++
+			if d.Required {
+				requiredBad++
+			}
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, timeout)
@@ -43,12 +45,14 @@ func runValidate(ctx context.Context, cfgPath string, timeout time.Duration) err
 		cancel()
 		if err != nil {
 			fmt.Printf("[FAIL] %s: %v\n", d.Name, err)
-			bad++
+			if d.Required {
+				requiredBad++
+			}
 			continue
 		}
 		fmt.Printf("[OK]   %s (%s)\n", d.Name, d.Type)
 	}
-	if bad > 0 {
+	if requiredBad > 0 {
 		return RuntimeError(1)
 	}
 	fmt.Printf("\n%d destination(s) OK\n", len(cfg.Destinations))
