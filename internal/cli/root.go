@@ -20,9 +20,9 @@ func NewRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVarP(&cfgPath, "config", "c", "/etc/ssl-update/config.yaml", "config file path")
 	root.AddCommand(newVersionCmd())
-
-	// Other subcommands (newRunCmd / newValidateCmd / newShowStateCmd) are
-	// registered in Tasks 9, 10, 11 to keep this task small and compilable.
+	root.AddCommand(newRunCmd())
+	root.AddCommand(newValidateCmd())
+	root.AddCommand(newShowStateCmd())
 
 	// Make cfgPath available to subcommands via context if needed later.
 	_ = cfgPath
