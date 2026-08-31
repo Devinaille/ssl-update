@@ -1047,8 +1047,9 @@ type fakeDest struct {
 }
 
 func (f *fakeDest) Name() string { return f.name }
+func (f *fakeDest) CertName(b CertBundle) string { return "name-" + f.name }
 func (f *fakeDest) Deploy(ctx context.Context, cert CertBundle, hint string) (DeployResult, error) {
-    return DeployResult{CertID: "fake-id"}, nil
+    return DeployResult{CertID: "fake-id", CertName: "name-" + f.name}, nil
 }
 func (f *fakeDest) Validate(ctx context.Context) error { return nil }
 
@@ -1107,16 +1108,16 @@ import (
     "context"
     "errors"
     "time"
+
+    "ssl-update/internal/cert"
 )
 
 // CertBundle is the cert material passed to a Destination for deployment.
-type CertBundle struct {
-    Certificate []byte
-    PrivateKey  []byte
-    Domains     []string
-    MainDomain  string
-    NotAfter    time.Time
-}
+//
+// We re-export cert.CertBundle under this name so destinations don't
+// need to import the cert package directly (avoids import cycles in
+// tests). The two types are identical.
+type CertBundle = cert.CertBundle
 
 // DeployResult identifies the cert in the service side so subsequent
 // renewals can update it in place.
@@ -1129,8 +1130,22 @@ type DeployResult struct {
 
 // Destination is implemented by every push target.
 type Destination interface {
+    // Name returns the destination's reference name from config.
     Name() string
-    Deploy(ctx context.Context, cert CertBundle, certIDHint string) (DeployResult, error)
+
+    // CertName returns the cert_name this destination will use for
+    // the given bundle. Must be deterministic and stable for the
+    // same input — used by the runner to build the state key and
+    // look up the prior cert_id hint before calling Deploy.
+    CertName(bundle CertBundle) string
+
+    // Deploy pushes the cert. If certIDHint is non-empty the
+    // destination should update the existing cert with that id;
+    // otherwise it should create a new cert. The returned
+    // DeployResult.CertName must equal what CertName(bundle) returned.
+    Deploy(ctx context.Context, bundle CertBundle, certIDHint string) (DeployResult, error)
+
+    // Validate checks connectivity + credentials without pushing a cert.
     Validate(ctx context.Context) error
 }
 
@@ -1240,6 +1255,8 @@ import (
     "fmt"
 
     "github.com/spf13/cobra"
+
+    "ssl-update/internal/destination"
 )
 
 // NewRootCmd builds the root command and attaches all subcommands.
@@ -1254,9 +1271,9 @@ func NewRootCmd() *cobra.Command {
     }
     root.PersistentFlags().StringVarP(&cfgPath, "config", "c", "/etc/ssl-update/config.yaml", "config file path")
     root.AddCommand(newVersionCmd())
-    root.AddCommand(newRunCmd())
-    root.AddCommand(newValidateCmd())
-    root.AddCommand(newShowStateCmd())
+
+    // Other subcommands (newRunCmd / newValidateCmd / newShowStateCmd) are
+    // registered in Tasks 9, 10, 11 to keep this task small and compilable.
 
     // Make cfgPath available to subcommands via context if needed later.
     _ = cfgPath
@@ -1269,18 +1286,10 @@ func newVersionCmd() *cobra.Command {
         Short: "Print version and built-in destination types",
         Run: func(cmd *cobra.Command, args []string) {
             fmt.Printf("ssl-update %s\n", Version)
-            fmt.Printf("destination types: %v\n", listTypes())
+            fmt.Printf("destination types: %v\n", destination.ListTypes())
         },
     }
 }
-```
-
-Add a small helper in the same file:
-
-```go
-import "ssl-update/internal/destination"
-
-func listTypes() []string { return destination.ListTypes() }
 ```
 
 - [ ] **Step 7.3: Wire main.go to call NewRootCmd**
@@ -1317,7 +1326,7 @@ git add internal/cli/root.go internal/cli/version.go cmd/ssl-update/main.go
 git commit -m "feat(cli): cobra root + version subcommand"
 ```
 
-Note: Task 7 wires the root command but adds stub `newRunCmd`/`newValidateCmd`/`newShowStateCmd` references. Real implementations come in Tasks 9–11. To make Task 7 build, create thin stubs in Tasks 7a/9/10/11 OR defer registration. **Simpler: skip stubs in Task 7 and just register `newVersionCmd`; add the other `new*Cmd` functions inline in their own tasks and edit root.go to add them.** Adjusted: edit root.go in Task 7 to add ONLY `newVersionCmd()`, then in each subsequent CLI task, edit root.go to register the new subcommand. This avoids stub-impl churn.
+> **Note on registration order:** `newRunCmd`, `newValidateCmd`, `newShowStateCmd` are NOT registered here — they don't exist yet. They're added to `root.go` in Tasks 9, 10, 11 respectively, each as a one-line edit.
 
 ---
 
@@ -1342,7 +1351,6 @@ import (
     "context"
     "encoding/json"
     "errors"
-    "fmt"
     "os"
     "path/filepath"
     "testing"
@@ -1357,20 +1365,17 @@ import (
 type fakeDest struct {
     name        string
     deployErr   error
-    deployDelay time.Duration
     calls       int
     lastCertID  string
 }
 
 func (f *fakeDest) Name() string { return f.name }
+func (f *fakeDest) CertName(c cert.CertBundle) string { return "name-" + f.name }
 func (f *fakeDest) Deploy(ctx context.Context, c cert.CertBundle, hint string) (destination.DeployResult, error) {
     f.calls++
     f.lastCertID = hint
-    if f.deployDelay > 0 {
-        time.Sleep(f.deployDelay)
-    }
     if f.deployErr != nil {
-        return destination.DeployResult{}, f.deployErr
+        return destination.DeployResult{CertName: "name-" + f.name}, f.deployErr
     }
     return destination.DeployResult{
         CertID:   "fake-" + f.name,
@@ -1402,7 +1407,11 @@ func newState(t *testing.T) *state.State {
 func TestRun_AllSuccess_ExitZero(t *testing.T) {
     d1 := &fakeDest{name: "a"}
     d2 := &fakeDest{name: "b"}
-    r := New([]namedDest{{cfg: config.DestinationConfig{Name: "a"}, dest: d1}, {cfg: config.DestinationConfig{Name: "b"}, dest: d2}}, newState(t), 2)
+    items := []NamedDest{
+        {Cfg: config.DestinationConfig{Name: "a"}, Dest: d1},
+        {Cfg: config.DestinationConfig{Name: "b"}, Dest: d2},
+    }
+    r := New(items, newState(t), 2)
     code := r.Run(context.Background(), makeBundle())
     if code != 0 {
         t.Errorf("exit code = %d, want 0", code)
@@ -1414,7 +1423,8 @@ func TestRun_AllSuccess_ExitZero(t *testing.T) {
 
 func TestRun_RequiredFail_ExitOne(t *testing.T) {
     d1 := &fakeDest{name: "a", deployErr: errors.New("boom")}
-    r := New([]namedDest{{cfg: config.DestinationConfig{Name: "a", Required: true}, dest: d1}}, newState(t), 1)
+    items := []NamedDest{{Cfg: config.DestinationConfig{Name: "a", Required: true}, Dest: d1}}
+    r := New(items, newState(t), 1)
     if code := r.Run(context.Background(), makeBundle()); code != 1 {
         t.Errorf("exit code = %d, want 1", code)
     }
@@ -1422,7 +1432,8 @@ func TestRun_RequiredFail_ExitOne(t *testing.T) {
 
 func TestRun_OptionalFail_ExitZero(t *testing.T) {
     d1 := &fakeDest{name: "a", deployErr: errors.New("boom")}
-    r := New([]namedDest{{cfg: config.DestinationConfig{Name: "a", Required: false}, dest: d1}}, newState(t), 1)
+    items := []NamedDest{{Cfg: config.DestinationConfig{Name: "a", Required: false}, Dest: d1}}
+    r := New(items, newState(t), 1)
     if code := r.Run(context.Background(), makeBundle()); code != 0 {
         t.Errorf("exit code = %d, want 0", code)
     }
@@ -1431,10 +1442,11 @@ func TestRun_OptionalFail_ExitZero(t *testing.T) {
 func TestRun_AllOptionalFail_StillExitZero(t *testing.T) {
     d1 := &fakeDest{name: "a", deployErr: errors.New("boom")}
     d2 := &fakeDest{name: "b", deployErr: errors.New("boom")}
-    r := New([]namedDest{
-        {cfg: config.DestinationConfig{Name: "a", Required: false}, dest: d1},
-        {cfg: config.DestinationConfig{Name: "b", Required: false}, dest: d2},
-    }, newState(t), 2)
+    items := []NamedDest{
+        {Cfg: config.DestinationConfig{Name: "a", Required: false}, Dest: d1},
+        {Cfg: config.DestinationConfig{Name: "b", Required: false}, Dest: d2},
+    }
+    r := New(items, newState(t), 2)
     if code := r.Run(context.Background(), makeBundle()); code != 0 {
         t.Errorf("exit code = %d, want 0 (per spec 9.1)", code)
     }
@@ -1444,7 +1456,8 @@ func TestRun_PassesCertIDHint(t *testing.T) {
     st := newState(t)
     st.Set("a:name-a", state.Entry{CertID: "hint-1"})
     d1 := &fakeDest{name: "a"}
-    r := New([]namedDest{{cfg: config.DestinationConfig{Name: "a", Required: true}, dest: d1}}, st, 1)
+    items := []NamedDest{{Cfg: config.DestinationConfig{Name: "a", Required: true}, Dest: d1}}
+    r := New(items, st, 1)
     r.Run(context.Background(), makeBundle())
     if d1.lastCertID != "hint-1" {
         t.Errorf("hint = %q, want hint-1", d1.lastCertID)
@@ -1454,17 +1467,18 @@ func TestRun_PassesCertIDHint(t *testing.T) {
 func TestRun_SavesStateOnSuccess(t *testing.T) {
     st := newState(t)
     d1 := &fakeDest{name: "a"}
-    r := New([]namedDest{{cfg: config.DestinationConfig{Name: "a", Required: true}, dest: d1}}, st, 1)
+    items := []NamedDest{{Cfg: config.DestinationConfig{Name: "a", Required: true}, Dest: d1}}
+    r := New(items, st, 1)
     r.Run(context.Background(), makeBundle())
     if err := st.Save(); err != nil {
         t.Fatal(err)
     }
-    data, _ := os.ReadFile(filepath.Join(t.TempDir(), ".."))
-    _ = data
-    // re-load from same path
-    raw, _ := os.ReadFile(statePath(st))
+    raw, err := os.ReadFile(st.Path())
+    if err != nil {
+        t.Fatalf("read state: %v", err)
+    }
     var persisted struct {
-        Deployments map[string]state.Entry
+        Deployments map[string]state.Entry `json:"deployments"`
     }
     if err := json.Unmarshal(raw, &persisted); err != nil {
         t.Fatalf("state not valid JSON: %v", err)
@@ -1476,15 +1490,6 @@ func TestRun_SavesStateOnSuccess(t *testing.T) {
     if e.CertID != "fake-a" {
         t.Errorf("CertID = %q, want fake-a", e.CertID)
     }
-}
-
-// statePath pokes into the State to read its path field; kept simple.
-func statePath(s *state.State) string {
-    // state.State.path is unexported. Use the only public method: roundtrip via Save+Inspect.
-    // Workaround: re-load from known path by introspecting through json file in tmp.
-    // In tests we use a single TempDir; recover via env or just trust Save's location.
-    // For simplicity, we set path explicitly below.
-    return s.Path()
 }
 ```
 
@@ -1519,6 +1524,7 @@ import (
     "context"
     "fmt"
     "sync"
+    "time"
 
     "ssl-update/internal/cert"
     "ssl-update/internal/config"
@@ -1526,27 +1532,19 @@ import (
     "ssl-update/internal/state"
 )
 
-// namedDest pairs a Destination with its config (used for name + required flag).
-type namedDest struct {
-    cfg  config.DestinationConfig
-    dest destination.Destination
-}
-
-// Result is the outcome for one destination.
-type Result struct {
-    Name     string
-    Success  bool
-    Err      error
-    Duration time.Duration
+// NamedDest pairs a Destination with its config (used for name + required flag).
+type NamedDest struct {
+    Cfg  config.DestinationConfig
+    Dest destination.Destination
 }
 
 type Runner struct {
-    items     []namedDest
-    state     *state.State
+    items       []NamedDest
+    state       *state.State
     maxParallel int
 }
 
-func New(items []namedDest, st *state.State, maxParallel int) *Runner {
+func New(items []NamedDest, st *state.State, maxParallel int) *Runner {
     if maxParallel <= 0 {
         maxParallel = 5
     }
@@ -1561,7 +1559,7 @@ func New(items []namedDest, st *state.State, maxParallel int) *Runner {
 func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
     sem := make(chan struct{}, r.maxParallel)
     var wg sync.WaitGroup
-    results := make(chan Result, len(r.items))
+    results := make(chan result, len(r.items))
 
     for _, item := range r.items {
         item := item
@@ -1571,21 +1569,19 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
             defer wg.Done()
             defer func() { <-sem }()
             start := time.Now()
-            key := item.cfg.Name + ":" + sanitizeKeyName(item.cfg)
-            hint := ""
-            if entry, ok := r.state.Get(key); ok {
-                hint = entry.CertID
-            }
-            res, err := item.dest.Deploy(ctx, bundle, hint)
-            results <- Result{
-                Name:     item.cfg.Name,
-                Success:  err == nil,
-                Err:      err,
-                Duration: time.Since(start),
+            certName := item.Dest.CertName(bundle)
+            hint := r.hintFor(item.Cfg.Name, certName)
+            res, err := item.Dest.Deploy(ctx, bundle, hint)
+            results <- result{
+                name:     item.Cfg.Name,
+                success:  err == nil,
+                err:      err,
+                duration: time.Since(start),
             }
             if err == nil {
+                key := item.Cfg.Name + ":" + res.CertName
                 r.state.Set(key, state.Entry{
-                    DestName:            item.cfg.Name,
+                    DestName:            item.Cfg.Name,
                     CertName:            res.CertName,
                     CertID:              res.CertID,
                     LastDeployedAt:      res.DeployedAt,
@@ -1597,18 +1593,17 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
     wg.Wait()
     close(results)
 
-    // Aggregate
     var requiredFailed bool
     for res := range results {
-        if res.Err != nil {
-            if isRequired(r.items, res.Name) {
+        if res.err != nil {
+            if isRequired(r.items, res.name) {
                 requiredFailed = true
-                fmt.Printf("[ERROR] [%s] deploy failed: %v\n", res.Name, res.Err)
+                fmt.Printf("[ERROR] [%s] deploy failed: %v\n", res.name, res.err)
             } else {
-                fmt.Printf("[WARN]  [%s] deploy failed (optional): %v\n", res.Name, res.Err)
+                fmt.Printf("[WARN]  [%s] deploy failed (optional): %v\n", res.name, res.err)
             }
         } else {
-            fmt.Printf("[INFO]  [%s] deployed in %s\n", res.Name, res.Duration)
+            fmt.Printf("[INFO]  [%s] deployed in %s\n", res.name, res.duration)
         }
     }
     if requiredFailed {
@@ -1617,26 +1612,31 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
     return 0
 }
 
-func isRequired(items []namedDest, name string) bool {
+func (r *Runner) hintFor(destName, certName string) string {
+    if certName == "" {
+        return ""
+    }
+    e, ok := r.state.Get(destName + ":" + certName)
+    if !ok {
+        return ""
+    }
+    return e.CertID
+}
+
+func isRequired(items []NamedDest, name string) bool {
     for _, it := range items {
-        if it.cfg.Name == name {
-            return it.cfg.Required
+        if it.Cfg.Name == name {
+            return it.Cfg.Required
         }
     }
     return false
 }
 
-// sanitizeKeyName returns the cert_name portion of the state key.
-// For v1, we don't yet have a typed CertName on DestinationConfig, so we
-// run sanitize on the destination's stated name. Destinations are expected
-// to expose cert_name via their own state. For now, we use the main
-// domain (passed in bundle) as the cert_name (handled by caller). This
-// helper is a placeholder for v2.
-func sanitizeKeyName(cfg config.DestinationConfig) string {
-    // The runner.New() caller is expected to populate a CertName
-    // before calling Run. For Task 8 we use the config's Name as a
-    // safe fallback; Task 9 wires the real value.
-    return cfg.Name
+type result struct {
+    name     string
+    success  bool
+    err      error
+    duration time.Duration
 }
 ```
 
@@ -2178,7 +2178,6 @@ import (
     "crypto/sha256"
     "encoding/hex"
     "encoding/json"
-    "errors"
     "fmt"
     "io"
     "net/http"
@@ -2236,14 +2235,19 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 
 func (s *Safeline) Name() string { return s.name }
 
+// CertName returns the cert_name this Safeline instance will use.
+func (s *Safeline) CertName(b cert.CertBundle) string {
+    if s.cfg.CertName != "" {
+        return s.cfg.CertName
+    }
+    return cert.SanitizeName(b.MainDomain)
+}
+
 // Deploy pushes the cert to Safeline. If hint is non-empty it PUTs the
 // existing cert; otherwise it POSTs a new one. Returns DeployResult with
 // the cert id in CertID and the resolved cert name in CertName.
 func (s *Safeline) Deploy(ctx context.Context, b cert.CertBundle, hint string) (destination.DeployResult, error) {
-    certName := s.cfg.CertName
-    if certName == "" {
-        certName = cert.SanitizeName(b.MainDomain)
-    }
+    certName := s.CertName(b)
 
     var (
         certID  string
@@ -2410,9 +2414,6 @@ func fingerprint(pem []byte) string {
 
 // verify we satisfy the interface
 var _ destination.Destination = (*Safeline)(nil)
-
-// silence unused import
-var _ = errors.New
 ```
 
 - [ ] **Step 12.2: Build**
@@ -2443,9 +2444,6 @@ package safeline
 
 import (
     "context"
-    "encoding/json"
-    "fmt"
-    "io"
     "net/http"
     "net/http/httptest"
     "strings"
@@ -2569,12 +2567,6 @@ func TestValidate_200OK(t *testing.T) {
 
 func TestSanitizeNameDefault(t *testing.T) {
     ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-        // inspect upload body for cert_name default
-        body, _ := io.ReadAll(r.Body)
-        if !strings.Contains(string(body), `"name"`) {
-            // upload body may not include name; the cert_name default
-            // is applied in Deploy() and is sent in update path.
-        }
         w.Write([]byte(`{"data":{"id":1},"err":null}`))
     })
     defer ts.Close()
@@ -2584,8 +2576,21 @@ func TestSanitizeNameDefault(t *testing.T) {
     if res.CertName != "a-com" {
         t.Errorf("CertName = %q, want a-com", res.CertName)
     }
-    _ = json.Marshal // keep import
-    _ = fmt.Sprintf  // keep import
+}
+
+func TestCertName_OverrideFromConfig(t *testing.T) {
+    s := &Safeline{name: "x", cfg: Config{CertName: "explicit-name"}}
+    got := s.CertName(cert.CertBundle{MainDomain: "*.a.com"})
+    if got != "explicit-name" {
+        t.Errorf("CertName = %q, want explicit-name", got)
+    }
+}
+
+func TestCertName_SanitizeDefault(t *testing.T) {
+    s := &Safeline{name: "x", cfg: Config{}}
+    if got := s.CertName(cert.CertBundle{MainDomain: "*.a.com"}); got != "wildcard-a-com" {
+        t.Errorf("CertName = %q, want wildcard-a-com", got)
+    }
 }
 ```
 
@@ -2683,11 +2688,16 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 
 func (a *AliyunESA) Name() string { return a.name }
 
-func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) (destination.DeployResult, error) {
-    certName := a.cfg.CertName
-    if certName == "" {
-        certName = cert.SanitizeName(b.MainDomain)
+// CertName returns the cert_name this AliyunESA instance will use.
+func (a *AliyunESA) CertName(b cert.CertBundle) string {
+    if a.cfg.CertName != "" {
+        return a.cfg.CertName
     }
+    return cert.SanitizeName(b.MainDomain)
+}
+
+func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) (destination.DeployResult, error) {
+    certName := a.CertName(b)
 
     params := map[string]string{
         "SiteId":     fmt.Sprintf("%d", a.cfg.SiteID),
@@ -2721,7 +2731,7 @@ func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) 
     }
     certID := resp.Id
     if certID == "" {
-        certID = hint // first deploy returns the same Id; or keep hint as best-known
+        certID = hint
     }
     if certID == "" {
         return destination.DeployResult{CertName: certName}, errors.New("aliyun_esa: no Id in response")
@@ -2777,7 +2787,6 @@ func fingerprint(pem []byte) string {
 }
 
 var _ destination.Destination = (*AliyunESA)(nil)
-var _ = strings.TrimSpace // reserved
 ```
 
 - [ ] **Step 14.2: Build (will fail — needs sign.go)**
@@ -2807,7 +2816,6 @@ import (
     "crypto/rand"
     "crypto/sha256"
     "encoding/hex"
-    "fmt"
     "net/url"
     "sort"
     "strings"
@@ -2873,9 +2881,6 @@ func randNonce() string {
     _, _ = rand.Read(b[:])
     return hex.EncodeToString(b[:])
 }
-
-// keep import in case Go complains
-var _ = fmt.Sprintf
 ```
 
 Note: this is the simplified RPC v3 form used by ESA. If a real call to ESA returns `IncompleteSignature`, see Aliyun docs for the full v3 (with `x-acs-*` headers). The Task 16 test verifies the call format with a live mock.
@@ -3068,6 +3073,20 @@ func TestValidate_OK(t *testing.T) {
     defer ts.Close()
     if err := a.Validate(context.Background()); err != nil {
         t.Errorf("Validate: %v", err)
+    }
+}
+
+func TestCertName_OverrideFromConfig(t *testing.T) {
+    a := &AliyunESA{name: "x", cfg: Config{CertName: "explicit-name"}}
+    if got := a.CertName(cert.CertBundle{MainDomain: "*.a.com"}); got != "explicit-name" {
+        t.Errorf("CertName = %q, want explicit-name", got)
+    }
+}
+
+func TestCertName_SanitizeDefault(t *testing.T) {
+    a := &AliyunESA{name: "x", cfg: Config{}}
+    if got := a.CertName(cert.CertBundle{MainDomain: "*.a.com"}); got != "wildcard-a-com" {
+        t.Errorf("CertName = %q, want wildcard-a-com", got)
     }
 }
 ```

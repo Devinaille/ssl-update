@@ -297,15 +297,11 @@ package destination
 import (
     "context"
     "time"
+
+    "ssl-update/internal/cert"
 )
 
-type CertBundle struct {
-    Certificate []byte    // PEM 完整链
-    PrivateKey  []byte    // PEM 私钥
-    Domains     []string  // SAN 列表
-    MainDomain  string    // 主域名
-    NotAfter    time.Time
-}
+type CertBundle = cert.CertBundle  // 别名，方便 destinations 不直接 import cert 包
 
 type DeployResult struct {
     CertID      string    // 服务侧 cert id（用于下次覆盖）
@@ -316,6 +312,10 @@ type DeployResult struct {
 
 type Destination interface {
     Name() string
+    // CertName 返回该 destination 这次会使用的 cert_name。
+    // 必须是确定性的、稳定的——runner 用它在 state 里查上次的 CertID 当 hint。
+    // 默认实现是 SanitizeName(bundle.MainDomain)；config 里有覆盖则用覆盖值。
+    CertName(bundle CertBundle) string
     Deploy(ctx context.Context, cert CertBundle, certIDHint string) (DeployResult, error)
     Validate(ctx context.Context) error
 }
