@@ -463,18 +463,28 @@ config:
 
 ### 9.1 退出码矩阵
 
-| 场景 | 行为 | 退出码 |
+**三档分类**：
+
+- **`0` 成功**：run 正常完成（即使个别 `required: false` 的 destination 失败也属此类）
+- **`1` 运行时失败**：run 启动了、cert 读到了，但至少一个 `required: true` 的 destination 推送失败
+- **`2` 启动期失败**：run 都没启动起来（config 错、cert 文件读不到、未知 type 等）——这种情况下 acme.sh 的 cert 已经写盘了，只是 ssl-update 没法做事
+
+| 场景 | 分类 | 退出码 |
 |------|------|--------|
-| 所有 destination 成功 | 正常完成 | 0 |
-| 任意 `required: true` 失败 | 整体失败 | 1 |
-| 只有 `required: false` 失败 | 告警但整体成功 | 0 |
-| 全部 destination 都失败（哪怕 required: false） | 日志红字，按规则整体成功 | 0 |
+| 所有 destination 成功 | 成功 | 0 |
+| 任意 `required: true` 失败 | 运行时失败 | 1 |
+| 只有 `required: false` 失败 | 成功（部分） | 0 |
+| 全部 destination 都失败（哪怕 required: false） | 成功（按规则） | 0 |
 | config 解析失败 / 文件不存在 | 启动期失败 | 2 |
 | cert 路径不存在 / PEM 损坏 | 启动期失败 | 2 |
-| state 文件读不到 | 警告，继续运行 | 0 |
+| state 文件读不到 | 成功（warn 后继续） | 0 |
 | 未知 destination type | 启动期失败 | 2 |
+| 必填 destination 字段缺失（如 api_token） | 启动期失败 | 2 |
 
-**对 acme.sh reloadcmd 的影响**：acme.sh 只看 exit code。`1` 会被 acme.sh 记录为 reloadcmd 失败（**但不影响 cert 续期状态**——cert 已经写盘了，只是后续没推成功）。
+**对 acme.sh reloadcmd 的影响**：acme.sh 只看 exit code。
+- `1` 会被 acme.sh 记录为 reloadcmd 失败 → 但 **cert 续期状态不变**（cert 已经写盘到 `~/.acme.sh/<domain>/`），只是没推送到服务
+- `2` 同样不影响 cert 续期，但意味着配置或环境有问题，下次还得排查
+- 用 `required: true` 还是 `false` 来表达"这个 destination 失败时算不算严重"
 
 ### 9.2 日志级别使用
 
@@ -603,21 +613,88 @@ sudo install -d -m 0700 /etc/ssl-update
 sudo cp config.example.yaml /etc/ssl-update/config.yaml
 sudo chmod 600 /etc/ssl-update/config.yaml
 # 然后填入真实凭据
+```
 
-# 4. 配 acme.sh reloadcmd
+### 14.1.1 接入 acme.sh reloadcmd
+
+**情形 A：首次安装 acme.sh 证书**（acme.sh `--install-cert` 还没跑过）：
+
+```bash
 acme.sh --install-cert -d "*.a.com" \
   --reloadcmd "/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml"
 ```
 
+**情形 B：已有 acme.sh 任务，现在要加 reloadcmd**（用户当前场景，推荐）：
+
+不要重新跑 `--install-cert`（会把 cert 重写到别的位置），直接编辑 acme.sh 的任务配置：
+
+```bash
+# 找到要改的任务文件
+vi ~/.acme.sh/*.a.com/*.a.com.conf
+
+# 在文件末尾追加一行（acme.sh 用这个变量做 reloadcmd）
+Le_ReloadCmd='/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml'
+```
+
+`~/.acme.sh/<domain>/<domain>.conf` 是 acme.sh 给每个域名的任务配置，acme.sh 每次签发/续期后会重读这个文件里的 `Le_ReloadCmd` 变量。改完保存即可生效，**不需要重启任何东西**，下次 acme.sh 检查续期（默认每天凌晨）就会用新 reloadcmd。
+
+**注意**：
+- reloadcmd 本身只在续期成功后才被触发
+- 如果想立即验证 reloadcmd 配置正确，可以手动跑一次：
+  ```bash
+  ~/.acme.sh/acme.sh --renew -d "*.a.com" --force  # 强制续期（即使没到期）
+  ```
+- 不要把 reloadcmd 加到 `--renew` 的 `--reloadcmd` 里，那个是过期手动续期用的
+
 ### 14.2 systemd（可选）
 
-不需要独立 systemd unit。acme.sh 自带 cron（每天检查续期），续期成功后才触发我们的 reloadcmd。
+ssl-update 本身**不需要独立 systemd unit**——acme.sh 自带 cron（每天检查续期），续期成功后才触发我们的 reloadcmd。
+
+如需把日志接 journald，**只用 systemd-cat 包一层**即可（见 §14.3），无需写 unit 文件。
 
 ### 14.3 日志
 
-- 默认输出到 stdout/stderr
-- 如需归档，外部用 `journalctl` 或 `tee` 接
-- v1 不内置文件日志
+**默认行为**：输出到 stdout/stderr，text 格式。
+
+**接 journald 的两种方式**：
+
+**方式 1：用 `systemd-cat` 包一层（推荐，最简）**
+
+acme.sh 的 `Le_ReloadCmd` 改成：
+
+```bash
+Le_ReloadCmd='/usr/bin/systemd-cat -t ssl-update /usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml'
+```
+
+之后所有 reloadcmd 输出会进 journald，标签 `ssl-update`：
+
+```bash
+journalctl -t ssl-update           # 看本次启动后的所有日志
+journalctl -t ssl-update -f        # 实时跟踪
+journalctl -t ssl-update --since today
+```
+
+不依赖任何额外 Go 库。
+
+**方式 2：slog JSON 格式 + 外部收集**
+
+`config.yaml` 设 `log.format: json`，把 stdout 重定向到 log collector（Filebeat / Promtail / 阿里云 SLS 等）：
+
+```yaml
+log:
+  level: info
+  format: json
+```
+
+适合已经把日志接到了集中式日志平台的场景。
+
+**v1 不内置**：文件日志（按日期 rotate 的 .log 文件）。需要的话外部 `tee` 一下：
+
+```bash
+Le_ReloadCmd='/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml 2>&1 | tee -a /var/log/ssl-update.log'
+```
+
+记得配 logrotate。
 
 ### 14.4 升级
 
