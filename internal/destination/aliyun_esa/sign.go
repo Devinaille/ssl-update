@@ -15,8 +15,9 @@ import (
 // request. Returns the URL-encoded query (without leading "?").
 //
 // Reference: Aliyun OpenAPI v3 RPC signature spec.
-//   StringToSign = "GET&%2F&" + URLEncode(canonicalQuery)
-//   Signature    = HMAC-SHA256(accessKeySecret + "&", StringToSign)
+//
+//	StringToSign = "GET&%2F&" + URLEncode(canonicalQuery)
+//	Signature    = HMAC-SHA256(accessKeySecret + "&", StringToSign)
 //
 // where canonicalQuery is "k1=v1&k2=v2&..." with keys sorted ascending.
 func sign(accessKeyID, accessKeySecret, action string, params map[string]string, region string, now time.Time) (string, error) {

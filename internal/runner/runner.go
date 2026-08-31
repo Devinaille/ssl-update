@@ -35,9 +35,10 @@ func New(items []NamedDest, st *state.State, maxParallel int) *Runner {
 
 // Run dispatches the cert to all destinations in parallel and returns
 // the exit code per spec §9.1:
-//   0 = success (all required succeeded, optional may have failed)
-//   1 = at least one required destination failed
-//   2 = caller error (not produced by Run; reserved for startup)
+//
+//	0 = success (all required succeeded, optional may have failed)
+//	1 = at least one required destination failed
+//	2 = caller error (not produced by Run; reserved for startup)
 func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 	sem := make(chan struct{}, r.maxParallel)
 	var wg sync.WaitGroup

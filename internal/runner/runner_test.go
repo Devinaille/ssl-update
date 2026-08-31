@@ -22,7 +22,7 @@ type fakeDest struct {
 	lastCertID string
 }
 
-func (f *fakeDest) Name() string { return f.name }
+func (f *fakeDest) Name() string                      { return f.name }
 func (f *fakeDest) CertName(c cert.CertBundle) string { return "name-" + f.name }
 func (f *fakeDest) Deploy(ctx context.Context, c cert.CertBundle, hint string) (destination.DeployResult, error) {
 	f.calls++
@@ -31,10 +31,10 @@ func (f *fakeDest) Deploy(ctx context.Context, c cert.CertBundle, hint string) (
 		return destination.DeployResult{CertName: "name-" + f.name}, f.deployErr
 	}
 	return destination.DeployResult{
-		CertID:       "fake-" + f.name,
-		CertName:     "name-" + f.name,
-		DeployedAt:   time.Now(),
-		Fingerprint:  "sha256:fake",
+		CertID:      "fake-" + f.name,
+		CertName:    "name-" + f.name,
+		DeployedAt:  time.Now(),
+		Fingerprint: "sha256:fake",
 	}, nil
 }
 func (f *fakeDest) Validate(ctx context.Context) error { return nil }

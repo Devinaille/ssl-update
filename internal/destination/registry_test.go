@@ -10,7 +10,7 @@ type fakeDest struct {
 	name string
 }
 
-func (f *fakeDest) Name() string { return f.name }
+func (f *fakeDest) Name() string                 { return f.name }
 func (f *fakeDest) CertName(b CertBundle) string { return "name-" + f.name }
 func (f *fakeDest) Deploy(ctx context.Context, cert CertBundle, hint string) (DeployResult, error) {
 	return DeployResult{CertID: "fake-id", CertName: "name-" + f.name}, nil
