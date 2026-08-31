@@ -80,6 +80,9 @@ ssl-update/
 ├── go.sum
 ├── README.md
 ├── config.example.yaml
+├── contrib/
+│   └── logrotate/
+│       └── ssl-update          # logrotate 配置示例
 ├── cmd/
 │   └── ssl-update/
 │       └── main.go              # 入口；显式 import 各 destination 包
@@ -220,6 +223,7 @@ state:
 log:
   level: info         # debug / info / warn / error
   format: text        # text / json
+  file: /var/log/ssl-update/ssl-update.log   # 留空 = stdout/stderr
 
 concurrency: 5        # 并发推送到 destinations 的上限
 
@@ -613,6 +617,13 @@ sudo install -d -m 0700 /etc/ssl-update
 sudo cp config.example.yaml /etc/ssl-update/config.yaml
 sudo chmod 600 /etc/ssl-update/config.yaml
 # 然后填入真实凭据
+
+# 4. 准备日志目录（本地日志，详见 §14.3）
+sudo install -d -m 0755 -o root -g adm /var/log/ssl-update
+sudo install -m 0644 /dev/null /var/log/ssl-update/ssl-update.log
+
+# 5. 装 logrotate 配置（可选但推荐）
+sudo cp contrib/logrotate/ssl-update /etc/logrotate.d/
 ```
 
 ### 14.1.1 接入 acme.sh reloadcmd
@@ -650,51 +661,71 @@ Le_ReloadCmd='/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml
 
 ssl-update 本身**不需要独立 systemd unit**——acme.sh 自带 cron（每天检查续期），续期成功后才触发我们的 reloadcmd。
 
-如需把日志接 journald，**只用 systemd-cat 包一层**即可（见 §14.3），无需写 unit 文件。
+如果不想用本地文件日志，§14.3 末尾有把日志接 journald 的一行方案（`systemd-cat` 包一层）。
 
 ### 14.3 日志
 
-**默认行为**：输出到 stdout/stderr，text 格式。
+**默认行为**：**写本地文件**。文件路径在 config 里配置。
 
-**接 journald 的两种方式**：
+**为什么走文件而不是 stdout/journald**：
+- acme.sh reloadcmd 通常从 cron 触发，stdout 没地方去
+- 本地文件方便事后排查（`tail -f /var/log/ssl-update/ssl-update.log`）
+- 配合 logrotate 长期归档
 
-**方式 1：用 `systemd-cat` 包一层（推荐，最简）**
-
-acme.sh 的 `Le_ReloadCmd` 改成：
-
-```bash
-Le_ReloadCmd='/usr/bin/systemd-cat -t ssl-update /usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml'
-```
-
-之后所有 reloadcmd 输出会进 journald，标签 `ssl-update`：
-
-```bash
-journalctl -t ssl-update           # 看本次启动后的所有日志
-journalctl -t ssl-update -f        # 实时跟踪
-journalctl -t ssl-update --since today
-```
-
-不依赖任何额外 Go 库。
-
-**方式 2：slog JSON 格式 + 外部收集**
-
-`config.yaml` 设 `log.format: json`，把 stdout 重定向到 log collector（Filebeat / Promtail / 阿里云 SLS 等）：
+**config 字段**：
 
 ```yaml
 log:
-  level: info
-  format: json
+  level: info             # debug / info / warn / error
+  format: text            # text / json
+  file: /var/log/ssl-update/ssl-update.log   # 日志文件路径
+  # 留空 = 输出到 stdout/stderr（acme.sh 自己的日志会捕获到）
 ```
 
-适合已经把日志接到了集中式日志平台的场景。
-
-**v1 不内置**：文件日志（按日期 rotate 的 .log 文件）。需要的话外部 `tee` 一下：
+**目录权限**：
 
 ```bash
-Le_ReloadCmd='/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml 2>&1 | tee -a /var/log/ssl-update.log'
+sudo install -d -m 0755 -o root -g adm /var/log/ssl-update
 ```
 
-记得配 logrotate。
+**logrotate 配置**（v1 不内置，靠系统 logrotate）：
+
+```bash
+# /etc/logrotate.d/ssl-update
+/var/log/ssl-update/ssl-update.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root adm
+    dateext
+    postrotate
+        # ssl-update 每次 run 完就退出，没有进程需要通知
+        # logrotate 不需要 reload 任何东西
+    endscript
+}
+```
+
+**接入 acme.sh reloadcmd 之后**：
+
+```bash
+# 改 ~/.acme.sh/<domain>/<domain>.conf
+Le_ReloadCmd='/usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml'
+```
+
+**stdout 模式（备选）**：
+
+把 `log.file` 留空就走 stdout/stderr。适合：
+- 想用 `journalctl`（外面包一层 `systemd-cat`）
+- 想用集中式日志平台（外面包一层 filebeat/promtail）
+- 临时调试
+
+```bash
+# 例：把日志接 journald，但本地不落盘
+Le_ReloadCmd='/usr/bin/systemd-cat -t ssl-update /usr/local/bin/ssl-update run --config /etc/ssl-update/config.yaml'
+```
 
 ### 14.4 升级
 
