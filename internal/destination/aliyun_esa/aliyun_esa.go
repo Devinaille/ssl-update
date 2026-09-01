@@ -55,7 +55,12 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 		return nil, fmt.Errorf("%w: aliyun_esa: site_id required", destination.ErrInvalidConfig)
 	}
 	if c.Endpoint == "" {
-		c.Endpoint = "esa.aliyuncs.com"
+		// Default to region-specific public endpoint.
+		// Per Aliyun docs (help.aliyun.com/.../api-esa-2024-09-10-endpoint):
+		//   cn-hangzhou  → esa.cn-hangzhou.aliyuncs.com
+		//   ap-southeast-1 → esa.ap-southeast-1.aliyuncs.com
+		// Pattern: esa.<region>.aliyuncs.com
+		c.Endpoint = "esa." + c.Region + ".aliyuncs.com"
 	}
 	return &AliyunESA{
 		name: name,
@@ -88,7 +93,7 @@ func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) 
 		params["Id"] = hint
 	}
 
-	body, status, err := a.call(ctx, "SetCertificate", params)
+	body, status, err := a.callWithMethod(ctx, "POST", "SetCertificate", params)
 	if err != nil {
 		return destination.DeployResult{CertName: certName}, err
 	}
@@ -123,6 +128,44 @@ func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) 
 	}, nil
 }
 
+// Site is a single ESA site returned by ListSites. Used by the
+// `ssl-update list-sites` subcommand to help users discover their
+// site_id values (the placeholder 1234567890123 in config.example.yaml
+// is not a real value).
+type Site struct {
+	SiteID     int64  `json:"SiteId"`
+	SiteName   string `json:"SiteName"`
+	Status     string `json:"Status"`
+	AccessType string `json:"AccessType"`
+	Coverage   string `json:"Coverage"`
+	PlanName   string `json:"PlanName"`
+}
+
+// ListSites queries ESA for all sites under this account. Returns up to
+// 500 sites per call (the API max). For accounts with more than 500
+// sites, the caller should paginate (not implemented here since the
+// common case is a handful of sites per account).
+func (a *AliyunESA) ListSites(ctx context.Context) ([]Site, error) {
+	body, status, err := a.call(ctx, "ListSites", map[string]string{
+		"PageNumber": "1",
+		"PageSize":   "500",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("aliyun_esa: list sites: http %d: %s", status, string(body))
+	}
+	var resp struct {
+		TotalCount int    `json:"TotalCount"`
+		Sites      []Site `json:"Sites"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("aliyun_esa: parse list: %w (body=%s)", err, string(body))
+	}
+	return resp.Sites, nil
+}
+
 func (a *AliyunESA) Validate(ctx context.Context) error {
 	_, status, err := a.call(ctx, "ListSites", map[string]string{
 		"PageNumber": "1",
@@ -141,12 +184,25 @@ func (a *AliyunESA) Validate(ctx context.Context) error {
 }
 
 func (a *AliyunESA) call(ctx context.Context, action string, params map[string]string) ([]byte, int, error) {
-	qs, err := sign(a.cfg.AccessKeyID, a.cfg.AccessKeySecret, action, params, a.cfg.Region, time.Now().UTC())
+	return a.callWithMethod(ctx, "GET", action, params)
+}
+
+// callWithMethod is call() with an explicit HTTP method. Used for
+// write actions (e.g. SetCertificate) which the Aliyun v3 API
+// requires to be POST. Read actions default to GET via call().
+//
+// Bug #6 (v0.1.1): SetCertificate was sent as GET, which ESA's
+// middleware rejects with http 403 "This http method is not supported."
+// Aliyun v3 convention: GET for read (List/Describe/Get), POST for
+// write (Create/Update/Delete/Set). The signature algorithm is the
+// same; only the method line in the StringToSign changes.
+func (a *AliyunESA) callWithMethod(ctx context.Context, method, action string, params map[string]string) ([]byte, int, error) {
+	qs, err := sign(a.cfg.AccessKeyID, a.cfg.AccessKeySecret, action, "2024-09-10", method, params, a.cfg.Region, time.Now().UTC())
 	if err != nil {
 		return nil, 0, err
 	}
 	url := "https://" + a.cfg.Endpoint + "/?" + qs
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -232,9 +232,9 @@ log:
 | `access_key_id` | ✅ | 阿里云 AccessKey ID |
 | `access_key_secret` | ✅ | 阿里云 AccessKey Secret |
 | `region` | | `cn-hangzhou`（中国站） / `ap-southeast-1`（国际站） |
-| `site_id` | ✅ | ESA 站点 ID（调 `ListSites` 接口获取） |
+| `site_id` | ✅ | ESA 站点 ID，运行 `ssl-update list-sites --name <dest>` 获取 |
 | `cert_name` | | 同上 |
-| `endpoint` | | 默认 `esa.aliyuncs.com`，一般不用改 |
+| `endpoint` | | 默认从 `region` 推导成 `esa.<region>.aliyuncs.com`。VPC 内网或自定义代理场景下手动覆盖 |
 
 ### cert_name 自动 sanitize 规则
 
@@ -292,6 +292,14 @@ ssl-update show-state [--json]
 ```
 
 表格模式默认，`--json` 输出原始 JSON。
+
+### `ssl-update list-sites` — 查 ESA site_id（v0.1.2+）
+
+```bash
+ssl-update list-sites --name prod-esa
+```
+
+只对 `aliyun_esa` destination 有效：调用 ESA `ListSites` API 并把 `SiteId` 列表打印出来。**首次配置时必跑一次**，因为控制台没地方查 SiteId 这个数字 ID。
 
 ### `ssl-update version` — 版本信息
 
@@ -421,11 +429,15 @@ rm ~/.local/share/ssl-update/state.json
 
 ### Q: 看到 "InvalidParameter.SiteId" ESA 错误
 
-`site_id` 错了或账号不对：
+`site_id` 错了或账号不对。用我们自己的子命令查：
 
 ```bash
-# 列出当前账号的所有 site
-aliyuncli esa ListSites --region cn-hangzhou
+ssl-update list-sites --name prod-esa
+# 输出：
+#   SITE_ID    SITE_NAME      STATUS  ACCESS_TYPE  COVERAGE  PLAN
+#   12345      example.com    active  NS           domestic  pro
+#   67890      test.com       pending CNAME        global    free
+#
 # 找到正确的 site_id 后改 config.yaml
 ```
 

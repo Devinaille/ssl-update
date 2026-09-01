@@ -55,6 +55,10 @@ destinations:
       access_key_id: REPLACE_ME
       access_key_secret: REPLACE_ME
       region: cn-hangzhou               # cn-hangzhou (中国站) | ap-southeast-1 (国际站)
-      site_id: 1234567890123            # ESA 站点 ID (调用 ListSites 获取)
+      site_id: 1234567890123            # 真实 site_id: 运行 `ssl-update list-sites --name prod-esa` 获取
       cert_name: ""                     # empty = auto
-      endpoint: esa.aliyuncs.com        # default OK for both 中国/国际
+      # endpoint: auto-derived as `esa.<region>.aliyuncs.com` from region.
+      # Override only if you need VPC endpoint (esa-vpc.<region>.aliyuncs.com)
+      # or a custom proxy. Per Aliyun docs:
+      #   cn-hangzhou     → esa.cn-hangzhou.aliyuncs.com
+      #   ap-southeast-1  → esa.ap-southeast-1.aliyuncs.com

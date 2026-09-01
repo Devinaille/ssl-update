@@ -60,6 +60,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newValidateCmd())
 	root.AddCommand(newShowStateCmd())
+	root.AddCommand(newListSitesCmd())
 	return root
 }
 
