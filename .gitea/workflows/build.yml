@@ -105,6 +105,10 @@ jobs:
   # ---------------------------------------------------------------------------
   # On tag push (vX.Y.Z), gather all build artifacts and create a Gitea
   # release with the binaries and sha256 sums attached.
+  #
+  # Replaces softprops/action-gh-release because that action calls
+  # GitHub-only endpoints (POST /releases/generate-notes → 405 on Gitea)
+  # even when the rest of the API is compatible.
   # ---------------------------------------------------------------------------
   release:
     name: release
@@ -115,6 +119,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so we can compute release notes from commits
+          # between the previous tag and this one.
+          fetch-depth: 0
 
       - name: download all build artifacts
         uses: actions/download-artifact@v3
@@ -124,19 +132,79 @@ jobs:
       - name: list downloaded artifacts
         run: find artifacts -type f | sort
 
-      - name: create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          # Pure vX.Y.Z tags are stable releases; anything with a hyphen
-          # suffix (v0.2.0-rc1, v0.2.0-beta.1, etc.) is a pre-release.
-          # This matches semver convention.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/ssl-update
-            artifacts/**/sha256sum.txt
+      - name: generate release notes from commit log
+        id: notes
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          # Find the most recent stable tag (vX.Y.Z, no -suffix) before this one.
+          PREV_TAG=$(git tag --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -v "^${TAG}$" \
+            | head -1 || true)
+          {
+            echo "notes<<EOF"
+            echo "## ${TAG}"
+            echo ""
+            if [ -z "$PREV_TAG" ]; then
+              echo "Initial release."
+            else
+              echo "Changes since ${PREV_TAG}:"
+              echo ""
+              git log --no-merges --pretty=format:"- %s (%h)" "${PREV_TAG}..${TAG}"
+              echo ""
+            fi
+            echo ""
+            echo "## Checksums"
+            echo ""
+            echo '```'
+            find artifacts -type f -name sha256sum.txt -exec cat {} \;
+            echo '```'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: create release and upload assets via Gitea API
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ github.server_url }}/api/v1
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES="${{ steps.notes.outputs.notes }}"
+
+          # 1. Create the release (POST /api/v1/repos/{owner}/{repo}/releases).
+          #    prerelease is auto-detected from the tag name per semver:
+          #    vX.Y.Z       → stable
+          #    vX.Y.Z-rc1   → pre-release
+          PRERELEASE="false"
+          case "$TAG" in
+            *-*) PRERELEASE="true" ;;
+          esac
+
+          echo "Creating release for $TAG (prerelease=$PRERELEASE)..."
+          RESP=$(curl -fsS -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$TAG" \
+              --arg body "$NOTES" \
+              --argjson prerelease "$PRERELEASE" \
+              '{tag_name:$tag, name:$name, body:$body, prerelease:$prerelease}')" \
+            "$API/repos/$REPO/releases")
+          RELEASE_ID=$(echo "$RESP" | jq -r '.id')
+          echo "Created release id=$RELEASE_ID"
+          echo "URL: ${{ github.server_url }}/$REPO/releases/tag/$TAG"
+
+          # 2. Upload each artifact as a release asset.
+          #    flatten path: artifacts/<job>/pkg/.../ssl-update → ssl-update
+          for file in $(find artifacts -type f -not -name '*.sha256'); do
+            NAME="$(basename "$file")"
+            echo "Uploading $NAME ..."
+            curl -fsS -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -F "attachment=@${file}" \
+              "$API/repos/$REPO/releases/$RELEASE_ID/assets?name=$NAME" \
+              > /dev/null
+          done
+          echo "Done."
