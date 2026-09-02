@@ -103,6 +103,66 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # Smoke-test the built binary: structural checks (file/ldd), config
+  # validation, error strategies, CLI flag wiring, log formats. No
+  # external services — all targets point at 127.0.0.1:1.
+  #
+  # Runs only the linux-amd64 binary functionally; arm64 is checked
+  # structurally (ELF class + arch) since qemu emulation would slow
+  # the pipeline without adding coverage that unit tests don't already
+  # provide.
+  # ---------------------------------------------------------------------------
+  smoke-test:
+    name: smoke test (amd64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download amd64 binary
+        uses: actions/download-artifact@v3
+        with:
+          name: ssl-update-linux-amd64
+          path: bin
+
+      - name: download arm64 binary
+        uses: actions/download-artifact@v3
+        with:
+          name: ssl-update-linux-arm64
+          path: bin-arm64
+
+      - name: arm64 structural check
+        run: |
+          ARM_BIN=$(find bin-arm64 -name ssl-update -type f | head -1)
+          if [ -z "$ARM_BIN" ]; then
+            echo "FAIL: arm64 binary not found"
+            exit 1
+          fi
+          echo "arm64 file info:"
+          file "$ARM_BIN"
+          if ! file "$ARM_BIN" | grep -q "ARM aarch64"; then
+            echo "FAIL: arm64 binary is not ARM aarch64"
+            exit 1
+          fi
+          echo "OK: arm64 binary is valid ARM aarch64 ELF"
+
+      - name: install prereqs for smoke-test.sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl python3
+
+      - name: run smoke tests
+        run: |
+          BIN=$(find bin -name ssl-update -type f | head -1)
+          if [ -z "$BIN" ]; then
+            echo "FAIL: amd64 binary not found in bin/"
+            exit 1
+          fi
+          echo "Testing: $BIN"
+          echo "=========================================="
+          BIN="$BIN" bash scripts/smoke-test.sh
+
+  # ---------------------------------------------------------------------------
   # On tag push (vX.Y.Z), gather all build artifacts and create a Gitea
   # release with the binaries and sha256 sums attached.
   #
