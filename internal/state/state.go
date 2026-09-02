@@ -80,10 +80,16 @@ func (s *State) Set(key string, e Entry) {
 }
 
 // Save atomically writes the state to disk. Safe to call even if not dirty.
+// A state with no backing path (constructed via Load("")) is a no-op:
+// prevents accidental tmp-file creation in the current working directory
+// when the caller passed --skip-state.
 func (s *State) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.dirty {
+		return nil
+	}
+	if s.path == "" {
 		return nil
 	}
 	data, err := json.MarshalIndent(s, "", "  ")

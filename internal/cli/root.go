@@ -36,13 +36,11 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if closer != nil {
-				ctx := cmd.Context()
-				if ctx == nil {
-					ctx = context.Background()
-				}
-				cmd.SetContext(context.WithValue(ctx, closerKey{}, closer))
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
 			}
+			cmd.SetContext(context.WithValue(ctx, closerKey{}, closer))
 			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {

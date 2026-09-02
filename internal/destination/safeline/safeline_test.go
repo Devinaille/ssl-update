@@ -235,6 +235,26 @@ func TestCertName_OverrideFromConfig(t *testing.T) {
 	}
 }
 
+// Regression: postJSON used to ignore the error from
+// http.NewRequestWithContext. Combined with a nil ctx (which happens
+// when log.file is empty and PersistentPreRunE doesn't inject a
+// context), this caused a nil-pointer panic in setAuth. The fix checks
+// the error.
+func TestDeploy_NilContext_ReturnsError(t *testing.T) {
+	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be reached with nil ctx")
+	})
+	defer ts.Close()
+	_, err := s.Deploy(nil, cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "hint-1")
+	if err == nil {
+		t.Fatal("expected error for nil ctx, got nil (would have panicked before fix)")
+	}
+}
+
 func TestCertName_SanitizeDefault(t *testing.T) {
 	s := &Safeline{name: "x", cfg: Config{}}
 	if got := s.CertName(cert.CertBundle{MainDomain: "*.a.com"}); got != "wildcard-a-com" {

@@ -4,7 +4,7 @@ package runner
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -45,6 +45,9 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 	results := make(chan result, len(r.items))
 
 	for _, item := range r.items {
+		if ctx.Err() != nil {
+			break
+		}
 		item := item
 		wg.Add(1)
 		sem <- struct{}{}
@@ -82,12 +85,12 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 		if res.err != nil {
 			if isRequired(r.items, res.name) {
 				requiredFailed = true
-				fmt.Printf("[ERROR] [%s] deploy failed: %v\n", res.name, res.err)
+				slog.Error("[ERROR] deploy failed", "dest", res.name, "err", res.err.Error())
 			} else {
-				fmt.Printf("[WARN]  [%s] deploy failed (optional): %v\n", res.name, res.err)
+				slog.Warn("[WARN] deploy failed (optional)", "dest", res.name, "err", res.err.Error())
 			}
 		} else {
-			fmt.Printf("[INFO]  [%s] deployed in %s\n", res.name, res.duration)
+			slog.Info("[INFO] deployed", "dest", res.name, "duration", res.duration.String())
 		}
 	}
 	if requiredFailed {

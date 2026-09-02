@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -124,6 +125,14 @@ func (s *Safeline) CertName(b cert.CertBundle) string {
 // next renewal.
 func (s *Safeline) Deploy(ctx context.Context, b cert.CertBundle, hint string) (destination.DeployResult, error) {
 	certName := s.CertName(b)
+	fp := fingerprint(b.Certificate)
+	slog.Debug("deploying cert",
+		"dest", s.name,
+		"cert_name", certName,
+		"fingerprint", "sha256:"+fp,
+		"cert_pem_bytes", len(b.Certificate),
+		"hint", hint,
+	)
 
 	certID := hint
 	var err error
@@ -139,7 +148,6 @@ func (s *Safeline) Deploy(ctx context.Context, b cert.CertBundle, hint string) (
 		return destination.DeployResult{CertName: certName}, err
 	}
 
-	fp := fingerprint(b.Certificate)
 	return destination.DeployResult{
 		CertID:      id,
 		CertName:    certName,
@@ -260,8 +268,14 @@ func (s *Safeline) setAuth(req *http.Request) {
 }
 
 func (s *Safeline) postJSON(ctx context.Context, u string, body any) (string, error) {
-	data, _ := json.Marshal(body)
-	req, _ := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(data))
+	data, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("safeline: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", destination.ErrNetwork, err)
+	}
 	s.setAuth(req)
 	resp, err := s.hc.Do(req)
 	if err != nil {

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 		return StartupError("config", err)
 	}
 
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
 	// Build destinations.
 	var items []runner.NamedDest
 	for _, d := range cfg.Destinations {
@@ -89,7 +96,7 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 	if !opts.SkipState {
 		st, err = state.Load(expandHome(cfg.State.Path))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[WARN] state load failed (continuing fresh): %v\n", err)
+			slog.Warn("[WARN] state load failed (continuing fresh)", "err", err.Error())
 		}
 	}
 	if st == nil {
@@ -106,8 +113,10 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 
 	r := runner.New(items, st, cfg.Concurrency)
 	code := r.Run(ctx, bundle)
-	if err := st.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "[WARN] state save failed: %v\n", err)
+	if !opts.SkipState {
+		if err := st.Save(); err != nil {
+			slog.Warn("[WARN] state save failed", "err", err.Error())
+		}
 	}
 	if code != 0 {
 		return RuntimeError(code)

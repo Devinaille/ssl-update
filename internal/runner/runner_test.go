@@ -144,3 +144,42 @@ func TestRun_SavesStateOnSuccess(t *testing.T) {
 		t.Errorf("CertID = %q, want fake-a", e.CertID)
 	}
 }
+
+// Regression: --timeout wires ctx.WithTimeout into the runner. When
+// ctx is cancelled before Run is called, the runner must not spawn
+// any destination goroutines. Previously ctx cancellation was ignored
+// entirely.
+func TestRun_HonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+	items := []NamedDest{
+		{Cfg: config.DestinationConfig{Name: "a", Required: true}, Dest: &blockingDest{name: "a"}},
+		{Cfg: config.DestinationConfig{Name: "b", Required: true}, Dest: &blockingDest{name: "b"}},
+		{Cfg: config.DestinationConfig{Name: "c", Required: true}, Dest: &blockingDest{name: "c"}},
+	}
+	r := New(items, newState(t), 1)
+	r.Run(ctx, makeBundle())
+	for i, item := range items {
+		d := item.Dest.(*blockingDest)
+		if d.entered {
+			t.Errorf("destination[%d] (%s) entered Deploy despite pre-cancelled ctx", i, d.name)
+		}
+	}
+}
+
+// blockingDest records entry into Deploy and then waits for ctx.
+// Used to assert that the runner never calls Deploy when ctx is
+// already cancelled.
+type blockingDest struct {
+	name    string
+	entered bool
+}
+
+func (b *blockingDest) Name() string                      { return b.name }
+func (b *blockingDest) CertName(c cert.CertBundle) string { return "name-" + b.name }
+func (b *blockingDest) Deploy(ctx context.Context, c cert.CertBundle, hint string) (destination.DeployResult, error) {
+	b.entered = true
+	<-ctx.Done()
+	return destination.DeployResult{}, ctx.Err()
+}
+func (b *blockingDest) Validate(ctx context.Context) error { return nil }

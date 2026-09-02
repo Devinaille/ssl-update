@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -34,7 +34,7 @@ func runValidate(ctx context.Context, cfgPath string, timeout time.Duration) err
 	for _, d := range cfg.Destinations {
 		dest, err := destination.Create(d.Type, d.Name, d.Config)
 		if err != nil {
-			fmt.Printf("[FAIL] %s (%s): %v\n", d.Name, d.Type, err)
+			slog.Error("[FAIL] destination create", "dest", d.Name, "type", d.Type, "err", err.Error())
 			if d.Required {
 				requiredBad++
 			}
@@ -44,17 +44,17 @@ func runValidate(ctx context.Context, cfgPath string, timeout time.Duration) err
 		err = dest.Validate(cctx)
 		cancel()
 		if err != nil {
-			fmt.Printf("[FAIL] %s: %v\n", d.Name, err)
+			slog.Error("[FAIL] validate", "dest", d.Name, "err", err.Error())
 			if d.Required {
 				requiredBad++
 			}
 			continue
 		}
-		fmt.Printf("[OK]   %s (%s)\n", d.Name, d.Type)
+		slog.Info("[OK] validate", "dest", d.Name, "type", d.Type)
 	}
 	if requiredBad > 0 {
 		return RuntimeError(1)
 	}
-	fmt.Printf("\n%d destination(s) OK\n", len(cfg.Destinations))
+	slog.Info("all destinations OK", "count", len(cfg.Destinations))
 	return nil
 }

@@ -100,3 +100,14 @@ func TestSave_AtomicRename(t *testing.T) {
 		t.Errorf("state file not created: %v", err)
 	}
 }
+
+// Regression: Save on an in-memory state (constructed via Load("") by
+// --skip-state) must NOT create a tmp file in the current working
+// directory. Used to leak state-*.json.tmp into CWD.
+func TestSave_EmptyPathIsNoop(t *testing.T) {
+	s, _ := Load("")
+	s.Set("k", Entry{CertID: "1"})
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save with empty path should be no-op, got %v", err)
+	}
+}

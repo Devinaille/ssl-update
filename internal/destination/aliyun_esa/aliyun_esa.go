@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -81,6 +82,14 @@ func (a *AliyunESA) CertName(b cert.CertBundle) string {
 
 func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) (destination.DeployResult, error) {
 	certName := a.CertName(b)
+	fp := fingerprint(b.Certificate)
+	slog.Debug("deploying cert",
+		"dest", a.name,
+		"cert_name", certName,
+		"fingerprint", "sha256:"+fp,
+		"cert_pem_bytes", len(b.Certificate),
+		"hint", hint,
+	)
 
 	params := map[string]string{
 		"SiteId":      fmt.Sprintf("%d", a.cfg.SiteID),
@@ -119,7 +128,6 @@ func (a *AliyunESA) Deploy(ctx context.Context, b cert.CertBundle, hint string) 
 	if certID == "" {
 		return destination.DeployResult{CertName: certName}, errors.New("aliyun_esa: no Id in response")
 	}
-	fp := fingerprint(b.Certificate)
 	return destination.DeployResult{
 		CertID:      certID,
 		CertName:    certName,
