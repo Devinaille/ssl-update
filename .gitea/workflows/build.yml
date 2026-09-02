@@ -133,7 +133,6 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: generate release notes from commit log
-        id: notes
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"
@@ -143,7 +142,6 @@ jobs:
             | grep -v "^${TAG}$" \
             | head -1 || true)
           {
-            echo "notes<<EOF"
             echo "## ${TAG}"
             echo ""
             if [ -z "$PREV_TAG" ]; then
@@ -160,8 +158,8 @@ jobs:
             echo '```'
             find artifacts -type f -name sha256sum.txt -exec cat {} \;
             echo '```'
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          } > /tmp/release-notes.md
+          echo "Wrote $(wc -l < /tmp/release-notes.md) lines to /tmp/release-notes.md"
 
       - name: create release and upload assets via Gitea API
         env:
@@ -170,7 +168,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          NOTES="${{ steps.notes.outputs.notes }}"
 
           # 1. Create the release (POST /api/v1/repos/{owner}/{repo}/releases).
           #    prerelease is auto-detected from the tag name per semver:
@@ -188,7 +185,7 @@ jobs:
             -d "$(jq -n \
               --arg tag "$TAG" \
               --arg name "$TAG" \
-              --arg body "$NOTES" \
+              --rawfile body /tmp/release-notes.md \
               --argjson prerelease "$PRERELEASE" \
               '{tag_name:$tag, name:$name, body:$body, prerelease:$prerelease}')" \
             "$API/repos/$REPO/releases")
