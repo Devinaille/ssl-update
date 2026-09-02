@@ -130,6 +130,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          # Pure vX.Y.Z tags are stable releases; anything with a hyphen
+          # suffix (v0.2.0-rc1, v0.2.0-beta.1, etc.) is a pre-release.
+          # This matches semver convention.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/ssl-update
