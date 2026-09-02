@@ -30,11 +30,13 @@ func NewRootCmd() *cobra.Command {
 			}
 			cfg, err := config.LoadFile(cfgPath)
 			if err != nil {
-				return err
+				// Wrap so main.go can map this to exit code 2 (startup
+				// error) instead of the default 1.
+				return StartupError("config", err)
 			}
 			_, closer, err := setupLogger(cfg.Log, logLevel, logFormat)
 			if err != nil {
-				return err
+				return StartupError("logger", err)
 			}
 			ctx := cmd.Context()
 			if ctx == nil {

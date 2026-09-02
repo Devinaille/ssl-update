@@ -84,11 +84,10 @@ else
     fail "file: ELF executable, statically linked" "$(file "$BIN")"
 fi
 
-if ldd "$BIN" 2>&1 | grep -q "not a dynamic executable"; then
-    pass "ldd: no dynamic dependencies"
-else
-    fail "ldd: no dynamic dependencies" "$(ldd "$BIN" 2>&1 | head -3)"
-fi
+# ldd check dropped: the 'file' check above already confirms static
+# linkage. ldd's exact output string ("not a dynamic executable" vs
+# "statically linked") varies across glibc versions and isn't worth
+# a flaky test.
 
 echo
 echo "== Tier 2: config validation =="
