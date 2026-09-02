@@ -132,6 +132,27 @@ jobs:
       - name: list downloaded artifacts
         run: find artifacts -type f | sort
 
+      # Rewrite each sha256sum.txt so its entries reference the binary's
+      # final upload name (ssl-update-<ver>-<plat>) instead of the bare
+      # "ssl-update". This way `sha256sum -c <file>.sha256sum` works
+      # after the user downloads both files together. The release notes
+      # below pick up the rewritten content automatically.
+      - name: rewrite checksum entries to match upload names
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for file in $(find artifacts -type f -name sha256sum.txt); do
+            case "$file" in
+              *linux-amd64*) PLAT="linux-amd64" ;;
+              *linux-arm64*) PLAT="linux-arm64" ;;
+              *) echo "skip: $file"; continue ;;
+            esac
+            NEWBIN="ssl-update-${TAG}-${PLAT}"
+            sed -i "s/  ssl-update$/  ${NEWBIN}/" "$file"
+            echo "  $file → references ${NEWBIN}"
+          done
+
       - name: generate release notes from commit log
         run: |
           set -euo pipefail
@@ -194,10 +215,29 @@ jobs:
           echo "Created release id=$RELEASE_ID"
           echo "URL: ${{ github.server_url }}/$REPO/releases/tag/$TAG"
 
-          # 2. Upload each artifact as a release asset.
-          #    flatten path: artifacts/<job>/pkg/.../ssl-update → ssl-update
-          for file in $(find artifacts -type f -not -name '*.sha256'); do
-            NAME="$(basename "$file")"
+          # 2. Upload each artifact as a release asset with a name that
+          #    encodes the version + platform, so the release page can
+          #    distinguish amd64 from arm64 at a glance. Matches the
+          #    filename references rewritten into sha256sum.txt above,
+          #    keeping `sha256sum -c` usable after download.
+          for file in $(find artifacts -type f); do
+            case "$file" in
+              *linux-amd64*) PLAT="linux-amd64" ;;
+              *linux-arm64*) PLAT="linux-arm64" ;;
+              *) echo "skip: $file"; continue ;;
+            esac
+            BASENAME="$(basename "$file")"
+            case "$BASENAME" in
+              ssl-update)
+                NAME="ssl-update-${TAG}-${PLAT}"
+                ;;
+              sha256sum.txt)
+                NAME="ssl-update-${TAG}-${PLAT}.sha256sum"
+                ;;
+              *)
+                NAME="${BASENAME}-${PLAT}"
+                ;;
+            esac
             echo "Uploading $NAME ..."
             curl -fsS -X POST \
               -H "Authorization: token $GITHUB_TOKEN" \
