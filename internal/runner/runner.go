@@ -41,19 +41,38 @@ func New(items []NamedDest, st *state.State, maxParallel int) *Runner {
 //	2 = caller error (not produced by Run; reserved for startup)
 func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 	sem := make(chan struct{}, r.maxParallel)
+	required := requiredMap(r.items)
 	var wg sync.WaitGroup
 	results := make(chan result, len(r.items))
 
 	for _, item := range r.items {
+		// Pre-cancelled ctx: don't spawn the goroutine at all. Inside
+		// the goroutine, the select below also checks ctx, but Go's
+		// select is non-deterministic when both cases are ready — a
+		// top-of-loop check is the only way to deterministically
+		// guarantee no goroutine ever enters Deploy when ctx is
+		// already done.
 		if ctx.Err() != nil {
 			break
 		}
 		item := item
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
-			defer func() { <-sem }()
+			// Acquire the concurrency slot inside the goroutine, racing
+			// against ctx cancel. If ctx is already cancelled, this
+			// goroutine never enters Deploy at all — much cleaner than
+			// blocking the main loop on sem <- struct{}{}.
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results <- result{
+					name: item.Cfg.Name,
+					err:  ctx.Err(),
+				}
+				return
+			}
 			start := time.Now()
 			certName := item.Dest.CertName(bundle)
 			hint := r.hintFor(item.Cfg.Name, certName)
@@ -83,7 +102,7 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 	var requiredFailed bool
 	for res := range results {
 		if res.err != nil {
-			if isRequired(r.items, res.name) {
+			if required[res.name] {
 				requiredFailed = true
 				slog.Error("[ERROR] deploy failed", "dest", res.name, "err", res.err.Error())
 			} else {
@@ -110,13 +129,15 @@ func (r *Runner) hintFor(destName, certName string) string {
 	return e.CertID
 }
 
-func isRequired(items []NamedDest, name string) bool {
+// requiredMap builds an O(1) lookup of which destinations are required.
+// Pre-computed once before the result loop instead of doing an O(n)
+// linear scan per result (was O(n^2) for n destinations).
+func requiredMap(items []NamedDest) map[string]bool {
+	m := make(map[string]bool, len(items))
 	for _, it := range items {
-		if it.Cfg.Name == name {
-			return it.Cfg.Required
-		}
+		m[it.Cfg.Name] = it.Cfg.Required
 	}
-	return false
+	return m
 }
 
 type result struct {
