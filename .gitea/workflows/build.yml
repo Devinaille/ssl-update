@@ -166,6 +166,7 @@ jobs:
           API: ${{ github.server_url }}/api/v1
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
