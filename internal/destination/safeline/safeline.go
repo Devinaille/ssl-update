@@ -182,7 +182,10 @@ func (s *Safeline) Validate(ctx context.Context) error {
 }
 
 // findByDomain returns the id of the first cert whose domains contain the
-// given domain, or "" if none matches.
+// given domain, or "" if none matches. Match is not exact: we accept the
+// bare apex (a.com) when querying for the wildcard (*.a.com) and vice
+// versa, because the WAF stores whichever form was used at upload time
+// and they refer to the same logical certificate.
 func (s *Safeline) findByDomain(ctx context.Context, domain string) (string, error) {
 	if domain == "" {
 		return "", nil
@@ -220,14 +223,28 @@ func (s *Safeline) findByDomain(ctx context.Context, domain string) (string, err
 	if parsed.Err != nil {
 		return "", fmt.Errorf("safeline: api err: %v", parsed.Err)
 	}
+	want := domainVariants(domain)
 	for _, n := range parsed.Data.Nodes {
 		for _, d := range n.Domains {
-			if d == domain {
-				return strconv.Itoa(n.ID), nil
+			for _, w := range want {
+				if d == w {
+					return strconv.Itoa(n.ID), nil
+				}
 			}
 		}
 	}
 	return "", nil
+}
+
+// domainVariants returns the set of forms the WAF might have stored the
+// given domain under. For "*.a.com" we also try "a.com" (the apex), and
+// vice versa. For inputs without a "*." prefix we return just [domain].
+func domainVariants(domain string) []string {
+	if strings.HasPrefix(domain, "*.") {
+		apex := strings.TrimPrefix(domain, "*.")
+		return []string{domain, apex}
+	}
+	return []string{domain}
 }
 
 // upsert calls POST /api/open/cert. If certID is non-empty the body

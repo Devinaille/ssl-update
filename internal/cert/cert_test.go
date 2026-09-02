@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func makeTestCert(t *testing.T) (certPath, keyPath string, domains []string, main string) {
+func makeTestCert(t *testing.T) (certPath, keyPath string, main string) {
 	t.Helper()
 	dir := t.TempDir()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -46,7 +46,7 @@ func makeTestCert(t *testing.T) (certPath, keyPath string, domains []string, mai
 	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
-	return certPath, keyPath, []string{"*.a.com", "a.com"}, "*.a.com"
+	return certPath, keyPath, "*.a.com"
 }
 
 func TestSanitizeName_Wildcard(t *testing.T) {
@@ -77,8 +77,8 @@ func TestSanitizeName_Empty(t *testing.T) {
 }
 
 func TestReadBundle_FromFiles(t *testing.T) {
-	certPath, keyPath, domains, main := makeTestCert(t)
-	b, err := ReadBundle(certPath, keyPath, domains, main)
+	certPath, keyPath, main := makeTestCert(t)
+	b, err := ReadBundle(certPath, keyPath, main)
 	if err != nil {
 		t.Fatalf("ReadBundle: %v", err)
 	}
@@ -88,13 +88,16 @@ func TestReadBundle_FromFiles(t *testing.T) {
 	if len(b.Domains) != 2 {
 		t.Errorf("len(Domains) = %d, want 2", len(b.Domains))
 	}
+	if b.Domains[0] != "*.a.com" || b.Domains[1] != "a.com" {
+		t.Errorf("Domains = %v, want [*.a.com a.com] (from leaf SAN)", b.Domains)
+	}
 	if b.NotAfter.IsZero() {
 		t.Error("NotAfter should be parsed from PEM")
 	}
 }
 
 func TestReadBundle_MissingFile(t *testing.T) {
-	_, err := ReadBundle("/no/such/file", "/no/such/key", nil, "")
+	_, err := ReadBundle("/no/such/file", "/no/such/key", "")
 	if err == nil {
 		t.Error("expected error for missing cert file")
 	}
@@ -110,7 +113,7 @@ func TestReadBundle_BadPEM(t *testing.T) {
 	if err := os.WriteFile(badKey, []byte("not pem"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadBundle(badCert, badKey, nil, "")
+	_, err := ReadBundle(badCert, badKey, "")
 	if err == nil {
 		t.Error("expected error for non-PEM cert")
 	}

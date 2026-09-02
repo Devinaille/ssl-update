@@ -54,8 +54,14 @@ func runShowState(cfgPath string, asJSON bool) error {
 	sort.Strings(keys)
 	for _, k := range keys {
 		e := s.Deployments[k]
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			e.DestName, e.CertName, e.CertID, e.LastDeployedAt.Format("2006-01-02 15:04:05"), e.LastCertFingerprint)
+		// State stores UTC times; display them with explicit " UTC"
+		// suffix so users in non-UTC zones don't mistake local-time
+		// output for the actual timestamp (state.json is the source of
+		// truth and is always UTC).
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s UTC\t%s\n",
+			e.DestName, e.CertName, e.CertID,
+			e.LastDeployedAt.UTC().Format("2006-01-02 15:04:05"),
+			e.LastCertFingerprint)
 	}
 	return tw.Flush()
 }

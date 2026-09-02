@@ -86,7 +86,7 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 			"cert path empty (cert_path=%q, key_path=%q, domain=%q) — %s",
 			certPath, keyPath, domain, hint))
 	}
-	bundle, err := cert.ReadBundle(certPath, keyPath, nil, domain)
+	bundle, err := cert.ReadBundle(certPath, keyPath, domain)
 	if err != nil {
 		return StartupError("cert", err)
 	}
@@ -106,7 +106,7 @@ func runRun(ctx context.Context, cfgPath string, opts runOpts) error {
 	if opts.DryRun {
 		for _, it := range items {
 			fmt.Printf("[DRY-RUN] would deploy cert_name=%s to %s (%s)\n",
-				cert.SanitizeName(bundle.MainDomain), it.Cfg.Name, it.Cfg.Type)
+				it.Dest.CertName(bundle), it.Cfg.Name, it.Cfg.Type)
 		}
 		return nil
 	}

@@ -20,9 +20,12 @@ type CertBundle struct {
 	NotAfter    time.Time // parsed from the leaf cert
 }
 
-// ReadBundle loads cert + key from disk, parses the cert to extract NotAfter
-// and validates basic PEM structure.
-func ReadBundle(certPath, keyPath string, domains []string, mainDomain string) (CertBundle, error) {
+// ReadBundle loads cert + key from disk, parses the leaf certificate to
+// extract NotAfter and the SAN list, and validates basic PEM structure.
+// Domains is populated from the leaf cert's DNSNames — callers don't pass
+// it in. mainDomain is the user-configured primary domain (e.g. "*.a.com"),
+// typically from $Le_DomainMain / config.cert.domain.
+func ReadBundle(certPath, keyPath string, mainDomain string) (CertBundle, error) {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {
 		return CertBundle{}, fmt.Errorf("read cert %s: %w", certPath, err)
@@ -42,7 +45,7 @@ func ReadBundle(certPath, keyPath string, domains []string, mainDomain string) (
 	return CertBundle{
 		Certificate: certPEM,
 		PrivateKey:  keyPEM,
-		Domains:     domains,
+		Domains:     leaf.DNSNames,
 		MainDomain:  mainDomain,
 		NotAfter:    leaf.NotAfter,
 	}, nil

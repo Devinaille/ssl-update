@@ -160,6 +160,45 @@ func TestDeploy_ReusesExistingByDomain(t *testing.T) {
 	}
 }
 
+// Regression: the WAF may have stored the cert's domain as the bare
+// apex ("a.com") while we're querying with the wildcard form ("*.a.com").
+// Previously exact-string match missed this and we created a duplicate
+// cert instead of upserting.
+func TestDeploy_FindsExistingCert_WhenWAFStoresApexNotWildcard(t *testing.T) {
+	var postID int
+	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			// WAF stored only the apex, not the wildcard.
+			w.Write([]byte(`{"data":{"nodes":[
+				{"id":7,"domains":["a.com"]}
+			],"total":1},"err":null}`))
+		case "POST":
+			var body map[string]any
+			_ = jsonUnmarshal(r.Body, &body)
+			if v, ok := body["id"].(float64); ok {
+				postID = int(v)
+			}
+			w.Write([]byte(`{"data":7,"err":null}`))
+		}
+	})
+	defer ts.Close()
+	res, err := s.Deploy(context.Background(), cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if postID != 7 {
+		t.Errorf("expected id=7 (apex match), got id=%d — wildcard<->apex lookup failed", postID)
+	}
+	if res.CertID != "7" {
+		t.Errorf("CertID = %q, want 7", res.CertID)
+	}
+}
+
 // TestDeploy_WithHint_UpdatesInPlace: hint "7" → POST upsert with id=7,
 // no list call.
 func TestDeploy_WithHint_UpdatesInPlace(t *testing.T) {
