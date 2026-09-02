@@ -7,25 +7,25 @@
 #   # Linux amd64
 #   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 #     go build -trimpath -ldflags="-s -w -buildid=" \
-#     -o pkg/ssl-update-0.1.2-linux-amd64/ssl-update \
+#     -o pkg/ssl-update-0.1.3-linux-amd64/ssl-update \
 #     ./cmd/ssl-update
 #
 #   # Linux arm64
 #   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
 #     go build -trimpath -ldflags="-s -w -buildid=" \
-#     -o pkg/ssl-update-0.1.2-linux-arm64/ssl-update \
+#     -o pkg/ssl-update-0.1.3-linux-arm64/ssl-update \
 #     ./cmd/ssl-update
 #
 #   # Current platform (Windows host, dev machine)
 #   go build -trimpath -ldflags="-s -w -buildid=" -o ssl-update.exe ./cmd/ssl-update
 #
 # After build, verify with:
-#   file pkg/ssl-update-0.1.2-linux-amd64/ssl-update
+#   file pkg/ssl-update-0.1.3-linux-amd64/ssl-update
 #   # Expected: ELF 64-bit LSB executable, x86-64, statically linked, stripped
 
 BINARY       := ssl-update
 WINDOWS_BIN  := ssl-update.exe
-VERSION      := 0.1.2
+VERSION      := 0.1.3
 LDFLAGS      := -s -w -buildid=
 GOFLAGS      := -trimpath
 PKG_DIR      := pkg
