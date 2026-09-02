@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-02
+
+### Fixed
+- P1: `safeline.findByDomain` used exact-string match, missing the
+  case where the WAF stored the cert as the bare apex (`a.com`)
+  while we queried with the wildcard (`*.a.com`). That created
+  duplicate cert entries instead of upserting. The new
+  `domainVariants()` helper tries both forms. Regression test
+  added. (`internal/destination/safeline/safeline.go`)
+- P1: `show-state` now displays timestamps with explicit `UTC`
+  suffix so users in non-UTC time zones don't mistake local-time
+  output for the actual timestamp. State is always stored in UTC.
+  (`internal/cli/show_state.go`)
+- `cli/root.go` PersistentPreRunE returned raw errors from
+  `config.LoadFile` and `setupLogger`, so the main entry point's
+  `errors.As(*StartupErr)` check failed and config / logger errors
+  exited with code 1 instead of 2. Now wrapped with `StartupError`
+  so all startup failures map consistently to exit 2 (matching
+  README's documented exit-code contract).
+
+### Changed
+- P1: `dry-run` now prints each destination's effective `cert_name`
+  (via `Destination.CertName()`) so users with config overrides
+  see what would actually be pushed, not the raw sanitized domain.
+- P2: `cert.ReadBundle` no longer takes a `domains []string`
+  parameter. The bundle's `Domains` field is now always populated
+  from the leaf certificate's `DNSNames` SAN list, which is the
+  only correct source. Previously the runner passed `nil` for that
+  parameter, leaving the field unused in production.
+- P2: runner's semaphore acquisition moved from the main loop into
+  the goroutine itself with a `select` that also watches
+  `ctx.Done()`. Previously the main loop blocked on
+  `sem <- struct{}{}`, which (a) prevented the `ctx.Err()` check
+  at the top of the next iteration from running while a slow
+  destination held the slot, and (b) made concurrency effectively
+  sequential at startup. The top-of-loop `ctx.Err()` check is kept
+  because Go's `select` is non-deterministic when both cases are
+  ready, so a pre-cancelled context needs a deterministic bail
+  path. (`internal/runner/runner.go`)
+- P2: `isRequired` (O(n²) linear scan per result) replaced with
+  `requiredMap` (O(1) lookup precomputed once before the result
+  loop). Trivial gain at current destination counts but cleaner
+  and O(n) overall.
+- Build pipeline ships **linux-amd64 only**. arm64 was removed
+  because the maintainer doesn't deploy to ARM and can't verify it.
+  The local `make` target still supports `make build-linux-arm64`
+  for ad-hoc local builds.
+
+### Added
+- CI: `test` → `build` → `smoke-test` → `release` pipeline under
+  `.gitea/workflows/build.yml`. The smoke-test job downloads the
+  freshly-built binary and exercises it against dummy
+  configurations (no network services required), covering 30
+  assertions across:
+  - Tier 1: binary structural (file/ldd/version output)
+  - Tier 2: 10 config-validation failure modes (missing file, bad
+    YAML, missing/duplicate destination names, invalid log
+    level/format, missing cert paths, bad PEM, missing/unknown
+    destination type)
+  - Tier 3: error strategies (--dry-run, --only, --timeout,
+    --skip-state, show-state table/json, list-sites on wrong type,
+    log file actually written, log.format=json produces valid JSON)
+- CI: release job uses Gitea's native REST API (no
+  `softprops/action-gh-release`, which calls GitHub-only endpoints
+  and 405s on Gitea). Pre-release flag auto-detected from tag name
+  per semver: `vX.Y.Z` = stable, `vX.Y.Z-<suffix>` = pre-release.
+- CI: release assets are uploaded with names like
+  `ssl-update-v0.1.4-linux-amd64` (binary) and
+  `ssl-update-v0.1.4-linux-amd64.sha256sum` (checksum file).
+  Checksum entries are rewritten in place so `sha256sum -c` works
+  after download.
+- `scripts/smoke-test.sh`: the battery of checks invoked by CI,
+  also runnable locally as `BIN=/path/to/ssl-update
+  scripts/smoke-test.sh`. Color-coded PASS/FAIL output suitable
+  for CI log scraping.
+
 ## [0.1.3] - 2026-09-02
 
 ### Fixed
