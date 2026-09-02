@@ -1,0 +1,138 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch / tag when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests + vet on every push / PR. Required for the build job to run.
+  # ---------------------------------------------------------------------------
+  test:
+    name: vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (with race detector)
+        run: go test -race ./... -count=1
+
+  # ---------------------------------------------------------------------------
+  # Cross-compile static binaries for every supported target.
+  # Reads VERSION from the Makefile so the build directory layout and the
+  # injected -X ssl-update/internal/cli.Version ldflag stay in sync.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build ${{ matrix.target }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: extract VERSION from Makefile
+        id: meta
+        run: |
+          VERSION=$(grep -E '^VERSION\s*:=' Makefile | awk '{print $3}')
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not parse VERSION from Makefile" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: build ${{ matrix.target }}
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          OUT="pkg/ssl-update-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$OUT"
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath \
+              -ldflags="-s -w -buildid= -X ssl-update/internal/cli.Version=${VERSION}" \
+              -o "${OUT}/ssl-update" \
+              ./cmd/ssl-update
+          ( cd "$OUT" && sha256sum ssl-update > sha256sum.txt )
+          ls -la "$OUT"
+
+      - name: verify ELF + static linkage
+        run: |
+          BIN="pkg/ssl-update-${{ steps.meta.outputs.version }}-${{ matrix.target }}/ssl-update"
+          file "$BIN"
+          # Must be statically linked (CGO_ENABLED=0)
+          if ldd "$BIN" 2>&1 | grep -q 'not a dynamic executable'; then
+            echo "OK: statically linked"
+          else
+            echo "WARN: ldd output:"
+            ldd "$BIN" || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssl-update-${{ matrix.target }}
+          path: pkg/ssl-update-${{ steps.meta.outputs.version }}-${{ matrix.target }}/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # On tag push (vX.Y.Z), gather all build artifacts and create a Gitea
+  # release with the binaries and sha256 sums attached.
+  # ---------------------------------------------------------------------------
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: list downloaded artifacts
+        run: find artifacts -type f | sort
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/ssl-update
+            artifacts/**/sha256sum.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
