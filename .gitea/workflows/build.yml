@@ -34,24 +34,14 @@ jobs:
         run: go test -race ./... -count=1
 
   # ---------------------------------------------------------------------------
-  # Cross-compile static binaries for every supported target.
+  # Cross-compile static binary for the only supported target: linux/amd64.
   # Reads VERSION from the Makefile so the build directory layout and the
   # injected -X ssl-update/internal/cli.Version ldflag stay in sync.
   # ---------------------------------------------------------------------------
   build:
-    name: build ${{ matrix.target }}
+    name: build linux-amd64
     needs: test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: linux-amd64
-            goos: linux
-            goarch: amd64
-          - target: linux-arm64
-            goos: linux
-            goarch: arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -69,14 +59,14 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: build ${{ matrix.target }}
+      - name: build linux-amd64
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
-          OUT="pkg/ssl-update-${VERSION}-${{ matrix.target }}"
+          OUT="pkg/ssl-update-${VERSION}-linux-amd64"
           mkdir -p "$OUT"
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -trimpath \
               -ldflags="-s -w -buildid= -X ssl-update/internal/cli.Version=${VERSION}" \
               -o "${OUT}/ssl-update" \
@@ -86,7 +76,7 @@ jobs:
 
       - name: verify ELF + static linkage
         run: |
-          BIN="pkg/ssl-update-${{ steps.meta.outputs.version }}-${{ matrix.target }}/ssl-update"
+          BIN="pkg/ssl-update-${{ steps.meta.outputs.version }}-linux-amd64/ssl-update"
           file "$BIN"
           # Must be statically linked (CGO_ENABLED=0)
           if ldd "$BIN" 2>&1 | grep -q 'not a dynamic executable'; then
@@ -98,53 +88,30 @@ jobs:
 
       - uses: actions/upload-artifact@v3
         with:
-          name: ssl-update-${{ matrix.target }}
-          path: pkg/ssl-update-${{ steps.meta.outputs.version }}-${{ matrix.target }}/
+          name: ssl-update-linux-amd64
+          path: pkg/ssl-update-${{ steps.meta.outputs.version }}-linux-amd64/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Smoke-test the built binary: structural checks (file/ldd), config
-  # validation, error strategies, CLI flag wiring, log formats. No
-  # external services — all targets point at 127.0.0.1:1.
-  #
-  # Runs only the linux-amd64 binary functionally; arm64 is checked
-  # structurally (ELF class + arch) since qemu emulation would slow
-  # the pipeline without adding coverage that unit tests don't already
-  # provide.
+  # validation, error strategies, CLI flag wiring. No external services —
+  # all targets point at 127.0.0.1:1.
   # ---------------------------------------------------------------------------
   smoke-test:
-    name: smoke test (amd64)
+    name: smoke test
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: download amd64 binary
+      - name: download binary
         uses: actions/download-artifact@v3
         with:
           name: ssl-update-linux-amd64
           path: bin
 
-      - name: download arm64 binary
-        uses: actions/download-artifact@v3
-        with:
-          name: ssl-update-linux-arm64
-          path: bin-arm64
-
-      - name: arm64 structural check
-        run: |
-          ARM_BIN=$(find bin-arm64 -name ssl-update -type f | head -1)
-          if [ -z "$ARM_BIN" ]; then
-            echo "FAIL: arm64 binary not found"
-            exit 1
-          fi
-          echo "arm64 file info:"
-          file "$ARM_BIN"
-          if ! file "$ARM_BIN" | grep -q "ARM aarch64"; then
-            echo "FAIL: arm64 binary is not ARM aarch64"
-            exit 1
-          fi
-          echo "OK: arm64 binary is valid ARM aarch64 ELF"
+      - name: chmod +x (artifact download sometimes drops the executable bit)
+        run: chmod +x bin/ssl-update
 
       - name: install prereqs for smoke-test.sh
         run: |
@@ -153,9 +120,10 @@ jobs:
 
       - name: run smoke tests
         run: |
-          BIN=$(find bin -name ssl-update -type f | head -1)
-          if [ -z "$BIN" ]; then
-            echo "FAIL: amd64 binary not found in bin/"
+          BIN="$GITHUB_WORKSPACE/bin/ssl-update"
+          if [ ! -x "$BIN" ]; then
+            echo "FATAL: $BIN not executable"
+            ls -la "$GITHUB_WORKSPACE/bin/"
             exit 1
           fi
           echo "Testing: $BIN"
@@ -205,7 +173,6 @@ jobs:
           for file in $(find artifacts -type f -name sha256sum.txt); do
             case "$file" in
               *linux-amd64*) PLAT="linux-amd64" ;;
-              *linux-arm64*) PLAT="linux-arm64" ;;
               *) echo "skip: $file"; continue ;;
             esac
             NEWBIN="ssl-update-${TAG}-${PLAT}"
@@ -276,14 +243,12 @@ jobs:
           echo "URL: ${{ github.server_url }}/$REPO/releases/tag/$TAG"
 
           # 2. Upload each artifact as a release asset with a name that
-          #    encodes the version + platform, so the release page can
-          #    distinguish amd64 from arm64 at a glance. Matches the
-          #    filename references rewritten into sha256sum.txt above,
-          #    keeping `sha256sum -c` usable after download.
+          #    encodes the version + platform. Matches the filename
+          #    references rewritten into sha256sum.txt above, keeping
+          #    `sha256sum -c` usable after download.
           for file in $(find artifacts -type f); do
             case "$file" in
               *linux-amd64*) PLAT="linux-amd64" ;;
-              *linux-arm64*) PLAT="linux-arm64" ;;
               *) echo "skip: $file"; continue ;;
             esac
             BASENAME="$(basename "$file")"
