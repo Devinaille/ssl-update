@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI**: migrated `.gitea/workflows/build.yml` → `.github/workflows/build.yml` (Gitea Actions → GitHub Actions). The old file is kept under `.gitea/workflows/` as historical reference.
+- **CI**: release job now uses `softprops/action-gh-release@v2`. This action was dropped originally because it hit a Gitea-only 405 on `/releases/generate-notes`; on GitHub it works again.
+- **CI**: `actions/upload-artifact` and `actions/download-artifact` upgraded from `v3` to `v4` (v3 is deprecated on GitHub due to the Node 16 runtime retirement).
+
 ## [0.1.4] - 2026-09-02
 
 ### Fixed
