@@ -86,7 +86,7 @@ jobs:
             ldd "$BIN" || true
           fi
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ssl-update-linux-amd64
           path: pkg/ssl-update-${{ steps.meta.outputs.version }}-linux-amd64/

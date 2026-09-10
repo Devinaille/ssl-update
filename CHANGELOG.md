@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.6] - 2026-09-10
 
 ### Fixed
-- **CI**: clear Node.js 20 deprecation warnings. Bumped `actions/checkout` v4→v5, `actions/setup-go` v5→v6, `actions/upload-artifact` v4→v5, `actions/download-artifact` v4→v8, `softprops/action-gh-release` v2→v3 (all now target Node.js 24).
+- **CI**: clear Node.js 20 deprecation warnings. Bumped `actions/checkout` v4→v5, `actions/setup-go` v5→v6, `actions/upload-artifact` v4→v7, `actions/download-artifact` v4→v8, `softprops/action-gh-release` v2→v3 (all now target Node.js 24).
 - **CI**: `softprops/action-gh-release` rejects the legacy `body_file` input with `Unexpected input(s) 'body_file'`. Renamed to the canonical `body_path` so the release body upload works without GitHub falling back to an empty release notes body.
 
 ## [0.1.5] - 2026-09-10
