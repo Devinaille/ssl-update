@@ -5,12 +5,18 @@ All notable changes to ssl-update will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CI**: clear Node.js 20 deprecation warnings. Bumped `actions/checkout` v4→v5, `actions/setup-go` v5→v6, `actions/upload-artifact` v4→v5, `actions/download-artifact` v4→v5 (all now target Node.js 24).
+- **CI**: `softprops/action-gh-release@v2` rejects the legacy `body_file` input with `Unexpected input(s) 'body_file'`. Renamed to the canonical `body_path` so the release body upload works without GitHub falling back to an empty release notes body.
+
 ## [0.1.5] - 2026-09-10
 
 ### Changed
 - **CI**: migrated `.gitea/workflows/build.yml` → `.github/workflows/build.yml` (Gitea Actions → GitHub Actions). The old file is kept under `.gitea/workflows/` as historical reference.
 - **CI**: release job now uses `softprops/action-gh-release@v2`. This action was dropped originally because it hit a Gitea-only 405 on `/releases/generate-notes`; on GitHub it works again.
-- **CI**: `actions/upload-artifact` and `actions/download-artifact` upgraded from `v3` to `v4` (v3 is deprecated on GitHub due to the Node 16 runtime retirement).
+- **CI**: `actions/upload-artifact` and `actions/download-artifact` upgraded from `v3` to `v4` (v3 is deprecated on GitHub due to the Node 16 runtime retirement). Superseded by the Unreleased entry which goes to `v5`.
 
 ## [0.1.4] - 2026-09-02
 

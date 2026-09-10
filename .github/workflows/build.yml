@@ -21,9 +21,9 @@ jobs:
     name: vet / test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.27'
 
@@ -43,9 +43,9 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.27'
 
@@ -86,7 +86,7 @@ jobs:
             ldd "$BIN" || true
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ssl-update-linux-amd64
           path: pkg/ssl-update-${{ steps.meta.outputs.version }}-linux-amd64/
@@ -102,10 +102,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ssl-update-linux-amd64
           path: bin
@@ -147,14 +147,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history so we can compute release notes from commits
           # between the previous tag and this one.
           fetch-depth: 0
 
       - name: download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -244,7 +244,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body_file: /tmp/release-notes.md
+          body_path: /tmp/release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             stage/*
