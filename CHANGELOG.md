@@ -5,7 +5,7 @@ All notable changes to ssl-update will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.6] - 2026-09-10
 
 ### Fixed
 - **CI**: clear Node.js 20 deprecation warnings. Bumped `actions/checkout` v4→v5, `actions/setup-go` v5→v6, `actions/upload-artifact` v4→v5, `actions/download-artifact` v4→v5 (all now target Node.js 24).

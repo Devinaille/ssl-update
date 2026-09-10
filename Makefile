@@ -25,7 +25,7 @@
 
 BINARY       := ssl-update
 WINDOWS_BIN  := ssl-update.exe
-VERSION      := 0.1.5
+VERSION      := 0.1.6
 LDFLAGS      := -s -w -buildid=
 GOFLAGS      := -trimpath
 PKG_DIR      := pkg
