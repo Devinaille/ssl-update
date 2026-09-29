@@ -1,0 +1,106 @@
+name: Dev
+
+# Development builds.
+#
+# Runs on every push to `dev`: gofmt/vet/test, build a static linux/amd64
+# binary stamped `dev-<UTC timestamp>`, and run the smoke tests against it.
+# No GitHub Release is created. RC / release artifacts are cut from tags on
+# `main` only (see release.yml).
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dev:
+    name: gofmt / vet / test / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+
+      - name: gofmt
+        run: |
+          drift=$(gofmt -l .)
+          if [ -n "$drift" ]; then
+            echo "::error::gofmt drift in:"; echo "$drift"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (with race detector)
+        run: go test -race ./... -count=1
+
+      - name: build metadata
+        id: meta
+        run: |
+          echo "stamp=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: build linux-amd64 (dev stamp)
+        env:
+          STAMP: ${{ steps.meta.outputs.stamp }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          set -euo pipefail
+          VERSION="dev-${STAMP}-${SHORT}"
+          OUT="pkg/ssl-update-dev-linux-amd64"
+          mkdir -p "$OUT"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath \
+              -ldflags="-s -w -buildid= -X ssl-update/internal/cli.Version=${VERSION}" \
+              -o "${OUT}/ssl-update" \
+              ./cmd/ssl-update
+          ( cd "$OUT" && sha256sum ssl-update > sha256sum.txt )
+          echo "built version=${VERSION}"
+          ls -la "$OUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ssl-update-dev-linux-amd64
+          path: pkg/ssl-update-dev-linux-amd64/
+          if-no-files-found: error
+
+  smoke-test:
+    name: smoke test (dev)
+    needs: dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: download binary
+        uses: actions/download-artifact@v8
+        with:
+          name: ssl-update-dev-linux-amd64
+          path: bin
+
+      - name: chmod +x
+        run: chmod +x bin/ssl-update
+
+      - name: install prereqs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl python3
+
+      - name: run smoke tests
+        run: |
+          BIN="$GITHUB_WORKSPACE/bin/ssl-update"
+          if [ ! -x "$BIN" ]; then
+            echo "FATAL: $BIN not executable"
+            ls -la "$GITHUB_WORKSPACE/bin/"
+            exit 1
+          fi
+          echo "Testing: $BIN"
+          echo "=========================================="
+          BIN="$BIN" bash scripts/smoke-test.sh

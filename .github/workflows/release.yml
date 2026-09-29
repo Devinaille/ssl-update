@@ -1,0 +1,147 @@
+name: Release
+
+# RC / release packaging.
+#
+# Triggered by tags `v*` (or manual dispatch). The tag commit MUST be an
+# ancestor of `main` — cut releases by merging `dev` into `main` first, then
+# tagging. Tags containing a `-` (e.g. v0.2.0-rc1) are published as
+# pre-releases; plain `vX.Y.Z` tags are full releases.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build (e.g. v0.2.0-rc1 or v0.2.0)'
+        required: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: build + release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # Full history so we can compute notes and prove the tag is on main.
+          fetch-depth: 0
+
+      - name: resolve tag
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::could not resolve tag" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Enforce the branch model: RC / release artifacts may only be cut from
+      # commits that are already on main.
+      - name: ensure tag commit is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::${{ steps.meta.outputs.tag }} is not on main; merge dev into main, then tag"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+
+      - name: gofmt
+        run: |
+          drift=$(gofmt -l .)
+          if [ -n "$drift" ]; then
+            echo "::error::gofmt drift in:"; echo "$drift"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (with race detector)
+        run: go test -race ./... -count=1
+
+      - name: build linux-amd64
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          OUT="pkg/ssl-update-${TAG}-linux-amd64"
+          mkdir -p "$OUT"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath \
+              -ldflags="-s -w -buildid= -X ssl-update/internal/cli.Version=${VERSION}" \
+              -o "${OUT}/ssl-update" \
+              ./cmd/ssl-update
+          ( cd "$OUT" && sha256sum ssl-update > sha256sum.txt )
+          file "${OUT}/ssl-update"
+          ls -la "$OUT"
+
+      - name: stage release assets with version+platform names
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          SRC="pkg/ssl-update-${TAG}-linux-amd64"
+          STAGE="stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          NAME="ssl-update-${TAG}-linux-amd64"
+          cp "${SRC}/ssl-update" "${STAGE}/${NAME}"
+          # Rewrite the checksum entry to reference the final upload name so
+          # `sha256sum -c` works after downloading both files together.
+          sed "s/  ssl-update$/  ${NAME}/" "${SRC}/sha256sum.txt" \
+            > "${STAGE}/${NAME}.sha256sum"
+          echo "Staged:"
+          ls -la "$STAGE"
+
+      - name: generate release notes from commit log
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-version:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -v "^${TAG}$" \
+            | head -1 || true)
+          {
+            echo "## ${TAG}"
+            echo ""
+            if [ -z "$PREV_TAG" ]; then
+              echo "Initial release."
+            else
+              echo "Changes since ${PREV_TAG}:"
+              echo ""
+              git log --no-merges --pretty=format:"- %s (%h)" "${PREV_TAG}..${TAG}"
+              echo ""
+            fi
+            echo ""
+            echo "## Checksums"
+            echo ""
+            echo '```'
+            find stage -type f -name '*.sha256sum' -exec cat {} \;
+            echo '```'
+          } > /tmp/release-notes.md
+          echo "Wrote $(wc -l < /tmp/release-notes.md) lines to /tmp/release-notes.md"
+
+      - name: create release and upload assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body_path: /tmp/release-notes.md
+          # Tags with a suffix (…-rc1) are pre-releases; plain vX.Y.Z is full.
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
+          files: |
+            stage/*
