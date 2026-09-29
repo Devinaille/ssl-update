@@ -7,6 +7,7 @@ import (
 
 	"ssl-update/internal/cli"
 	_ "ssl-update/internal/destination/aliyun_esa"
+	_ "ssl-update/internal/destination/next_terminal"
 	_ "ssl-update/internal/destination/safeline"
 )
 

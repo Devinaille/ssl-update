@@ -1,6 +1,6 @@
 # ssl-update
 
-> 把 acme.sh 续期的证书自动推送到雷池 WAF（CE）和阿里云 ESA 的命令行工具。
+> 把 acme.sh 续期的证书自动推送到雷池 WAF（CE）、阿里云 ESA 和 Next Terminal 的命令行工具。
 > 支持插件式扩展，写一个 Go 包就能加新的推送目标。
 
 [![Go Version](https://img.shields.io/badge/Go-1.22%2B-blue)](https://go.dev)
@@ -235,6 +235,19 @@ log:
 | `site_id` | ✅ | ESA 站点 ID，运行 `ssl-update list-sites --name <dest>` 获取 |
 | `cert_name` | | 同上 |
 | `endpoint` | | 默认从 `region` 推导成 `esa.<region>.aliyuncs.com`。VPC 内网或自定义代理场景下手动覆盖 |
+
+#### Next Terminal（next_terminal）
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `api_url` | ✅ | 控制台地址，如 `https://nt.example.com:8088`（含协议，不带 `/api`） |
+| `api_token` | ✅ | 后台「账号 → 访问令牌」创建，类型选 `api` |
+| `common_name` | | 证书库里的 CN。留空 = 主域名（`*.a.com`）。**需与已有证书 CN 一致才会命中更新** |
+| `cert_type` | | `imported`（外部签发，默认） / `self-signed` / `issued` |
+| `renew_before` | | 续签提前天数，仅 `cert_type: issued` 时生效，默认 `0` |
+| `verify_tls` | | 自签控制台设 `false` |
+
+推送策略是 **import-or-update（有则更新、无则导入）**：先按 `common_name` 查证书库，命中则带上已有 `id` 调 `PUT /api/admin/certificates/upsert` 原地更新，未命中则新建。续期只更新同一条记录，不会累积重复证书条目。认证请求头为 `X-Auth-Token`。
 
 ### cert_name 自动 sanitize 规则
 
@@ -678,7 +691,7 @@ A: 不支持。设计上就是 Linux only。Windows 的路径分隔符、TLS 库
 
 A: 可以，只要那个客户端支持 `reloadcmd` 或类似的"续期后回调"机制（certbot 的 `--deploy-hook` 之类）。把它调起来指向 `ssl-update run --config ...` 就行。
 
-**Q: safeline / aliyun_esa 之外还能加什么 destination？**
+**Q: safeline / aliyun_esa / next_terminal 之外还能加什么 destination？**
 
 A: 任何能调 HTTPS API 推送证书的服务都行。常见候选：
 
@@ -695,7 +708,7 @@ A: 任何能调 HTTPS API 推送证书的服务都行。常见候选：
 
 ## 路线图
 
-- v0.1 (current)：safeline CE + aliyun_esa，文件日志，per-destination 失败策略
+- v0.1 (current)：safeline CE + aliyun_esa + next_terminal，文件日志，per-destination 失败策略
 - v0.2（计划）：凭据外置（env / file）、webhook 通知、重试、Prometheus 指标
 - v1.0（计划）：stable API、CHANGELOG、Homebrew tap
 
