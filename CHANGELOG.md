@@ -5,16 +5,17 @@ All notable changes to ssl-update will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-30
 
 ### Added
 - New `next_terminal` destination (`internal/destination/next_terminal`):
   pushes certificates to a Next Terminal bastion host so its reverse proxy
   serves the renewed cert. Uses `PUT /api/admin/certificates/upsert` with the
-  `X-Auth-Token` header. The deploy is **import-or-update**: the existing
-  certificate is looked up by `commonName` and, on a match, updated in place
-  (its `id` is sent in the body) so renewals never accumulate duplicate
-  entries. Config: `api_url`, `api_token`, `common_name`, `cert_type`,
+  `X-Auth-Token` header. The deploy is **import-or-update**: it reuses the
+  server-side id stored in state, or looks the certificate up by `commonName`
+  on first run, so renewals update the record in place and never accumulate
+  duplicate entries. After a fresh import the server-assigned id is read back
+  into state. Config: `api_url`, `api_token`, `common_name`, `cert_type`,
   `renew_before`, `verify_tls`.
 
 ### Changed

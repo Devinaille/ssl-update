@@ -708,8 +708,9 @@ A: 任何能调 HTTPS API 推送证书的服务都行。常见候选：
 
 ## 路线图
 
-- v0.1 (current)：safeline CE + aliyun_esa + next_terminal，文件日志，per-destination 失败策略
-- v0.2（计划）：凭据外置（env / file）、webhook 通知、重试、Prometheus 指标
+- v0.1：safeline CE + aliyun_esa，文件日志，per-destination 失败策略
+- v0.2 (current)：新增 next_terminal；import-or-update 防重复推送
+- v0.3（计划）：凭据外置（env / file）、webhook 通知、重试、Prometheus 指标
 - v1.0（计划）：stable API、CHANGELOG、Homebrew tap
 
 ---
