@@ -18,9 +18,10 @@
 //
 // The upsert endpoint is documented as update-or-create keyed by commonName.
 // To guarantee "import or update" and never accumulate duplicate entries,
-// Deploy first lists the existing certificates and, on a commonName match,
-// includes the existing id in the upsert body so the server updates that
-// record in place (preserving the id that reverse-proxy bindings reference).
+// Deploy reuses the id stored in state (certIDHint); on the first run it lists
+// the existing certificates and, on a commonName match, includes that id in the
+// upsert body so the server updates the record in place (preserving the id that
+// reverse-proxy bindings reference) instead of creating a duplicate.
 package next_terminal
 
 import (
@@ -133,11 +134,12 @@ func (n *NextTerminal) CertName(b cert.CertBundle) string {
 
 // Deploy performs an "import or update" against Next Terminal.
 //
-// It first looks up an existing certificate by commonName (best effort). If
-// one exists its id is included in the upsert body so the server updates that
-// record in place; otherwise the body omits the id and a new record is
-// created. This prevents duplicate imports across acme.sh renewals.
-func (n *NextTerminal) Deploy(ctx context.Context, b cert.CertBundle, _ string) (destination.DeployResult, error) {
+// If certIDHint is non-empty the stored id is sent straight through (update in
+// place). Otherwise the certificate is looked up by commonName. On a match the
+// id is included in the upsert body so the server updates that record; on a
+// miss the body omits the id and a new record is created. Either way renewals
+// never accumulate duplicate entries.
+func (n *NextTerminal) Deploy(ctx context.Context, b cert.CertBundle, certIDHint string) (destination.DeployResult, error) {
 	certName := n.CertName(b)
 	fp := fingerprint(b.Certificate)
 	slog.Debug("deploying cert",
@@ -145,14 +147,21 @@ func (n *NextTerminal) Deploy(ctx context.Context, b cert.CertBundle, _ string) 
 		"common_name", certName,
 		"fingerprint", "sha256:"+fp,
 		"cert_pem_bytes", len(b.Certificate),
+		"hint", certIDHint,
 	)
 
-	existingID, err := n.findExisting(ctx, certName)
-	if err != nil {
-		// Lookup is best-effort: the upsert endpoint still creates-or-updates
-		// by commonName. Never block a deploy on the pre-check.
-		slog.Warn("next_terminal: cert lookup failed, falling back to upsert by commonName", "dest", n.name, "err", err.Error())
-		existingID = ""
+	// Prefer the id recorded in state so renewals update the existing record
+	// without an extra lookup. Only on the first run (no hint) do we query by
+	// commonName; a failed lookup is best-effort and falls back to the upsert
+	// endpoint's own create-or-update-by-commonName semantics.
+	existingID := certIDHint
+	if existingID == "" {
+		found, err := n.findExisting(ctx, certName)
+		if err != nil {
+			slog.Warn("next_terminal: cert lookup failed, falling back to upsert by commonName", "dest", n.name, "err", err.Error())
+		} else {
+			existingID = found
+		}
 	}
 
 	body := map[string]any{
@@ -162,21 +171,31 @@ func (n *NextTerminal) Deploy(ctx context.Context, b cert.CertBundle, _ string) 
 		"privateKey":  string(b.PrivateKey),
 		"renewBefore": n.cfg.RenewBefore,
 	}
-	if existingID != "" {
+	creating := existingID == ""
+	if creating {
+		slog.Info("importing new certificate", "dest", n.name, "common_name", certName)
+	} else {
 		body["id"] = existingID
 		slog.Info("updating existing certificate", "dest", n.name, "common_name", certName, "id", existingID)
-	} else {
-		slog.Info("importing new certificate", "dest", n.name, "common_name", certName)
 	}
 
 	if err := n.putJSON(ctx, n.url(upsertPath), body); err != nil {
 		return destination.DeployResult{CertName: certName}, err
 	}
 
+	// A fresh import returns no id, so read it back to record the real
+	// server-side id for the next renewal. If it is not visible yet, leave
+	// CertID empty rather than storing a non-id value.
 	id := existingID
-	if id == "" {
-		id = certName
+	if creating {
+		found, err := n.findExisting(ctx, certName)
+		if err != nil {
+			slog.Warn("next_terminal: could not read back new cert id", "dest", n.name, "err", err.Error())
+		} else {
+			id = found
+		}
 	}
+
 	return destination.DeployResult{
 		CertID:      id,
 		CertName:    certName,

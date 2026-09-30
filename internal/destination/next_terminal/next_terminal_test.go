@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"ssl-update/internal/cert"
+	"ssl-update/internal/destination"
 )
 
 func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *NextTerminal) {
@@ -60,13 +62,23 @@ func TestNew_RequiresAPIURLAndToken(t *testing.T) {
 }
 
 // No existing cert with the same commonName → import: PUT upsert with the
-// documented body and no id.
+// documented body and no id. The server-assigned id is then read back so state
+// records the real id for the next renewal.
 func TestDeploy_ImportsNew(t *testing.T) {
-	var putBody map[string]any
+	var (
+		putBody map[string]any
+		gets    int
+	)
 	ts, n := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "GET" && r.URL.Path == listPath:
-			w.Write([]byte(`[]`))
+			gets++
+			if gets == 1 {
+				w.Write([]byte(`[]`))
+				return
+			}
+			// Read-back after create: the new cert is now visible.
+			w.Write([]byte(`[{"id":"new-1","commonName":"*.a.com"}]`))
 		case r.Method == "PUT" && r.URL.Path == upsertPath:
 			putBody = readJSON(t, r.Body)
 			w.Write([]byte(`{"message":"ok"}`))
@@ -84,6 +96,9 @@ func TestDeploy_ImportsNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
+	if gets != 2 {
+		t.Errorf("expected lookup + read-back (2 GETs), got %d", gets)
+	}
 	if _, hasID := putBody["id"]; hasID {
 		t.Errorf("import body must not contain id, got %v", putBody["id"])
 	}
@@ -99,11 +114,107 @@ func TestDeploy_ImportsNew(t *testing.T) {
 	if !strings.Contains(putBody["certificate"].(string), "BEGIN CERTIFICATE") {
 		t.Errorf("certificate not forwarded: %v", putBody["certificate"])
 	}
-	if res.CertID != "*.a.com" {
-		t.Errorf("CertID = %q, want fallback commonName", res.CertID)
+	if res.CertID != "new-1" {
+		t.Errorf("CertID = %q, want the server-assigned id new-1", res.CertID)
 	}
 	if res.CertName != "*.a.com" {
 		t.Errorf("CertName = %q, want *.a.com", res.CertName)
+	}
+}
+
+// When the just-created cert is not yet visible on read-back, CertID must be
+// left empty rather than storing a non-id value.
+func TestDeploy_ImportsNew_NoReadbackLeavesIDEmpty(t *testing.T) {
+	ts, n := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET":
+			w.Write([]byte(`[]`))
+		case r.Method == "PUT":
+			w.Write([]byte(`{"message":"ok"}`))
+		}
+	})
+	defer ts.Close()
+
+	res, err := n.Deploy(context.Background(), cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if res.CertID != "" {
+		t.Errorf("CertID = %q, want empty when the new id cannot be read back", res.CertID)
+	}
+}
+
+// A stored certIDHint skips the lookup and is sent straight through (update in
+// place, no duplicate).
+func TestDeploy_WithHint_SkipsList(t *testing.T) {
+	var putBody map[string]any
+	ts, n := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			t.Error("must not list when certIDHint is present")
+		case "PUT":
+			putBody = readJSON(t, r.Body)
+			w.Write([]byte(`{"message":"ok"}`))
+		}
+	})
+	defer ts.Close()
+
+	res, err := n.Deploy(context.Background(), cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "existing-7")
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if putBody["id"] != "existing-7" {
+		t.Errorf("update body id = %v, want existing-7", putBody["id"])
+	}
+	if res.CertID != "existing-7" {
+		t.Errorf("CertID = %q, want existing-7", res.CertID)
+	}
+}
+
+// A failed lookup with no hint must not block the deploy: fall back to a plain
+// upsert and leave CertID empty (the id is unknown).
+func TestDeploy_LookupFails_FallsBackToUpsert(t *testing.T) {
+	var (
+		sawPut  bool
+		putBody map[string]any
+	)
+	ts, n := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == listPath:
+			w.WriteHeader(500)
+			w.Write([]byte(`{"message":"boom"}`))
+		case r.Method == "PUT" && r.URL.Path == upsertPath:
+			sawPut = true
+			putBody = readJSON(t, r.Body)
+			w.Write([]byte(`{"message":"ok"}`))
+		}
+	})
+	defer ts.Close()
+
+	res, err := n.Deploy(context.Background(), cert.CertBundle{
+		Certificate: []byte("c"),
+		PrivateKey:  []byte("k"),
+		MainDomain:  "*.a.com",
+	}, "")
+	if err != nil {
+		t.Fatalf("Deploy should succeed on lookup failure: %v", err)
+	}
+	if !sawPut {
+		t.Fatal("expected upsert call after failed lookup")
+	}
+	if _, hasID := putBody["id"]; hasID {
+		t.Errorf("fallback body must not contain id, got %v", putBody["id"])
+	}
+	if res.CertID != "" {
+		t.Errorf("CertID = %q, want empty (id unknown)", res.CertID)
 	}
 }
 
@@ -168,44 +279,6 @@ func TestDeploy_UpdatesExistingNumericID(t *testing.T) {
 	}
 	if res.CertID != "42" {
 		t.Errorf("CertID = %q, want 42", res.CertID)
-	}
-}
-
-// A failed lookup must not block the deploy: fall back to a plain upsert.
-func TestDeploy_LookupFails_FallsBackToUpsert(t *testing.T) {
-	var (
-		sawPut  bool
-		putBody map[string]any
-	)
-	ts, n := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == "GET" && r.URL.Path == listPath:
-			w.WriteHeader(500)
-			w.Write([]byte(`{"message":"boom"}`))
-		case r.Method == "PUT" && r.URL.Path == upsertPath:
-			sawPut = true
-			putBody = readJSON(t, r.Body)
-			w.Write([]byte(`{"message":"ok"}`))
-		}
-	})
-	defer ts.Close()
-
-	res, err := n.Deploy(context.Background(), cert.CertBundle{
-		Certificate: []byte("c"),
-		PrivateKey:  []byte("k"),
-		MainDomain:  "*.a.com",
-	}, "")
-	if err != nil {
-		t.Fatalf("Deploy should succeed on lookup failure: %v", err)
-	}
-	if !sawPut {
-		t.Fatal("expected upsert call after failed lookup")
-	}
-	if _, hasID := putBody["id"]; hasID {
-		t.Errorf("fallback body must not contain id, got %v", putBody["id"])
-	}
-	if res.CertID != "*.a.com" {
-		t.Errorf("CertID = %q, want commonName fallback", res.CertID)
 	}
 }
 
@@ -317,6 +390,41 @@ func TestParseCertList_Shapes(t *testing.T) {
 		if len(items) != 1 || items[0].CommonName != "a.com" || string(items[0].ID) != "1" {
 			t.Errorf("parseCertList(%q) = %+v", in, items)
 		}
+	}
+}
+
+func TestClassifyHTTP(t *testing.T) {
+	cases := []struct {
+		name string
+		code int
+		body string
+		want error
+	}{
+		{"401 auth", 401, ``, destination.ErrAuth},
+		{"403 auth", 403, `{"message":"forbidden"}`, destination.ErrAuth},
+		{"404 not found", 404, `{"message":"nope"}`, destination.ErrCertNotFound},
+		{"422 rejected", 422, `{"message":"bad key"}`, destination.ErrCertRejected},
+		{"400 rejected", 400, `{"message":"bad cert"}`, destination.ErrCertRejected},
+		{"400 quota", 400, `{"message":"quota exceeded"}`, destination.ErrQuota},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := classifyHTTP(c.code, []byte(c.body))
+			if !errors.Is(err, c.want) {
+				t.Errorf("classifyHTTP(%d, %q) = %v, want wrapping %v", c.code, c.body, err, c.want)
+			}
+		})
+	}
+}
+
+func TestValidate_NetworkError(t *testing.T) {
+	iface, err := New("d", map[string]any{"api_url": "http://127.0.0.1:1", "api_token": "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := iface.(*NextTerminal)
+	if err := n.Validate(context.Background()); !errors.Is(err, destination.ErrNetwork) {
+		t.Errorf("Validate = %v, want ErrNetwork", err)
 	}
 }
 
