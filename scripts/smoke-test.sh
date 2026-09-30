@@ -75,7 +75,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
 echo "== Tier 1: binary smoke =="
 
 expect_exit          "version exits 0"                0 "$BIN" version
-expect_stdout_contains "version output has types"     "destination types: [aliyun_esa safeline]" "$BIN" version
+expect_stdout_contains "version output has types"     "destination types: [aliyun_esa next_terminal safeline]" "$BIN" version
 expect_exit          "--help exits 0"                 0 "$BIN" --help
 
 if file "$BIN" | grep -qE "ELF.*executable.*statically linked"; then

@@ -93,11 +93,11 @@ func TestDeploy_FirstTime_Creates(t *testing.T) {
 // whose domains match the main domain → upsert with that id.
 func TestDeploy_ReusesExistingByDomain(t *testing.T) {
 	var (
-		postID        int
-		postType      int
-		postCrt       string
-		postKey       string
-		hasManual     bool
+		postID    int
+		postType  int
+		postCrt   string
+		postKey   string
+		hasManual bool
 	)
 	ts, s := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

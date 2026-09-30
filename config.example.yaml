@@ -62,3 +62,16 @@ destinations:
       # or a custom proxy. Per Aliyun docs:
       #   cn-hangzhou     → esa.cn-hangzhou.aliyuncs.com
       #   ap-southeast-1  → esa.ap-southeast-1.aliyuncs.com
+
+  # ----- Next Terminal (开源堡垒机 / 反向代理证书库) -----
+  - name: prod-next-terminal
+    type: next_terminal
+    required: false
+    config:
+      api_url: https://nt.example.com:8088   # 控制台地址（含协议，不带 /api）
+      api_token: REPLACE_ME                   # 后台「账号 → 访问令牌」创建，type=api
+      common_name: ""                         # 留空 = 主域名（如 *.a.com）；需与证书库中已有 CN 一致才会更新
+      cert_type: imported                      # imported（外部签发，默认）| self-signed | issued
+      renew_before: 0                          # 续签提前天数，仅 type=issued 时生效
+      verify_tls: true                         # 自签控制台设 false
+
