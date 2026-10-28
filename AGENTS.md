@@ -78,8 +78,6 @@ debug in production.
 
 ## Branch & release flow
 
-The model follows `Devinaille/cloud-sync`.
-
 - **All development happens on `dev`.** Push to `dev` → `.github/workflows/dev.yml`
   runs gofmt/vet/test, builds a static linux/amd64 binary stamped
   `dev-<UTC timestamp>-<short sha>`, uploads it as an artifact, and runs smoke
