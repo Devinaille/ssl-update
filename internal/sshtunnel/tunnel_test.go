@@ -105,9 +105,10 @@ func mustPrivateKey(t *testing.T) crypto.PrivateKey {
 
 func TestNew_DefaultsPort22(t *testing.T) {
 	cfg := Config{
-		Host:           "127.0.0.1",
-		User:           "u",
-		PrivateKeyFile: writePrivateKey(t, mustPrivateKey(t)),
+		Host:                  "127.0.0.1",
+		User:                  "u",
+		PrivateKeyFile:        writePrivateKey(t, mustPrivateKey(t)),
+		InsecureIgnoreHostKey: true,
 	}
 	tun, err := New(cfg)
 	if err != nil {
