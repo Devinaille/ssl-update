@@ -5,6 +5,17 @@ All notable changes to ssl-update will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `safeline` can now reach its management API through an automatically managed
+  SSH tunnel (`ssh_tunnel` config). Useful when Safeline runs on a VPC-only
+  ECS and the API is not publicly reachable: the tunnel is opened on the first
+  HTTP request, reused for the run, and closed afterwards — no manual
+  `ssh -L` needed. Supports key auth, `known_hosts` verification (or an
+  explicit `insecure_ignore_host_key`), and an optional `target` override.
+  The reusable dialer lives in `internal/sshtunnel`.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

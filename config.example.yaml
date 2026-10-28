@@ -47,6 +47,22 @@ destinations:
       cert_name: ""                     # empty = auto from main domain (e.g. *.a.com -> wildcard-a-com)
       verify_tls: true                  # set false for self-signed
 
+      # Optional: reach api_url through an SSH jump host. Useful when the WAF
+      # runs on an Aliyun/VPC ECS whose management API is not publicly
+      # reachable. The tunnel is created on the first HTTP request and closed
+      # after the run — no manual `ssh -L` needed.
+      # ssh_tunnel:
+      #   host: 47.100.x.x                  # jump host (ECS public IP)
+      #   port: 22                          # default 22
+      #   user: ubuntu                      # required
+      #   private_key_file: /etc/ssl-update/aliyun.pem  # unencrypted .pem
+      #   # target defaults to api_url's host:port. If Safeline only listens
+      #   # on loopback, either set api_url to https://127.0.0.1:9443 or set
+      #   # target: 127.0.0.1:9443 here.
+      #   target: 127.0.0.1:9443
+      #   known_hosts_file: ~/.ssh/known_hosts  # default
+      #   insecure_ignore_host_key: false   # true = skip host-key check (unsafe)
+
   # ----- Aliyun Edge Security Acceleration (ESA) -----
   - name: prod-esa
     type: aliyun_esa

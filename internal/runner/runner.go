@@ -4,6 +4,7 @@ package runner
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -112,10 +113,25 @@ func (r *Runner) Run(ctx context.Context, bundle cert.CertBundle) int {
 			slog.Info("[INFO] deployed", "dest", res.name, "duration", res.duration.String())
 		}
 	}
+	r.closeDestinations()
 	if requiredFailed {
 		return 1
 	}
 	return 0
+}
+
+// closeDestinations releases any resources held by destinations (for
+// example SSH tunnels) after a run completes.
+func (r *Runner) closeDestinations() {
+	for _, item := range r.items {
+		c, ok := item.Dest.(io.Closer)
+		if !ok {
+			continue
+		}
+		if err := c.Close(); err != nil {
+			slog.Debug("close destination", "dest", item.Cfg.Name, "err", err.Error())
+		}
+	}
 }
 
 func (r *Runner) hintFor(destName, certName string) string {

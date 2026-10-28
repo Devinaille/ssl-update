@@ -44,6 +44,10 @@ go build -o ssl-update ./cmd/ssl-update
 - `internal/destination/<type>/` — one package per push target (`safeline`,
   `aliyun_esa`, `next_terminal`). Each has `const TypeName`, an `init()` that
   calls `destination.Register`, and `New/Name/CertName/Deploy/Validate`.
+- `internal/sshtunnel` — reusable SSH `direct-tcpip` dialer. `safeline` uses it
+  for the optional `ssh_tunnel` config so a VPC-only management API can be
+  reached without a manual `ssh -L`. Host keys are checked against
+  `known_hosts` unless `insecure_ignore_host_key: true`.
 - `internal/cert` — `ReadBundle` (PEM cert+key, SANs, NotAfter) and
   `SanitizeName` (`*.a.com` → `wildcard-a-com`).
 - `internal/config` — YAML load/validate (`cert`, `state`, `log`,
@@ -69,7 +73,10 @@ go build -o ssl-update ./cmd/ssl-update
 4. Add `httptest` unit tests. `verify_tls` defaults to **true**; tests that use
    a self-signed test server must either set `verify_tls: false` or inject
    `ts.Client()` into the destination's `hc`.
-5. Document the fields in `config.example.yaml`, both READMEs, and add a
+5. If the destination holds resources (e.g. an SSH tunnel), implement
+   `io.Closer`. The runner closes destinations after `run`, and `validate`
+   closes each one after checking it.
+6. Document the fields in `config.example.yaml`, both READMEs, and add a
    `CHANGELOG.md` entry.
 
 `ssl-update run --dry-run` prints each destination's `CertName()` without
