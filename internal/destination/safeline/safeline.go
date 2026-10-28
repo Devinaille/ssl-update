@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 
 	"ssl-update/internal/cert"
 	"ssl-update/internal/destination"
+	"ssl-update/internal/sshtunnel"
 )
 
 const TypeName = "safeline"
@@ -55,16 +57,18 @@ func init() {
 }
 
 type Config struct {
-	APIURL    string `mapstructure:"api_url"`
-	APIToken  string `mapstructure:"api_token"`
-	CertName  string `mapstructure:"cert_name"`
-	VerifyTLS *bool  `mapstructure:"verify_tls"`
+	APIURL    string            `mapstructure:"api_url"`
+	APIToken  string            `mapstructure:"api_token"`
+	CertName  string            `mapstructure:"cert_name"`
+	VerifyTLS *bool             `mapstructure:"verify_tls"`
+	SSHTunnel *sshtunnel.Config `mapstructure:"ssh_tunnel"`
 }
 
 type Safeline struct {
-	name string
-	cfg  Config
-	hc   *http.Client
+	name   string
+	cfg    Config
+	hc     *http.Client
+	tunnel *sshtunnel.Tunnel
 }
 
 // shouldVerify returns whether TLS cert verification should be performed.
@@ -93,6 +97,15 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 			InsecureSkipVerify: !c.shouldVerify(),
 		},
 	}
+	var tun *sshtunnel.Tunnel
+	if c.SSHTunnel != nil {
+		t, err := sshtunnel.New(*c.SSHTunnel)
+		if err != nil {
+			return nil, fmt.Errorf("%w: safeline: %v", destination.ErrInvalidConfig, err)
+		}
+		tun = t
+		transport.DialContext = tun.DialContext
+	}
 	return &Safeline{
 		name: name,
 		cfg:  c,
@@ -100,7 +113,16 @@ func New(name string, raw map[string]any) (destination.Destination, error) {
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
+		tunnel: tun,
 	}, nil
+}
+
+// Close releases the SSH tunnel, if one is configured.
+func (s *Safeline) Close() error {
+	if s.tunnel == nil {
+		return nil
+	}
+	return s.tunnel.Close()
 }
 
 func (s *Safeline) Name() string { return s.name }
@@ -169,7 +191,7 @@ func (s *Safeline) Validate(ctx context.Context) error {
 	s.setAuth(req)
 	resp, err := s.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", destination.ErrNetwork, err)
+		return wrapTransportErr(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
@@ -201,7 +223,7 @@ func (s *Safeline) findByDomain(ctx context.Context, domain string) (string, err
 	s.setAuth(req)
 	resp, err := s.hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", destination.ErrNetwork, err)
+		return "", wrapTransportErr(err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -296,7 +318,7 @@ func (s *Safeline) postJSON(ctx context.Context, u string, body any) (string, er
 	s.setAuth(req)
 	resp, err := s.hc.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", destination.ErrNetwork, err)
+		return "", wrapTransportErr(err)
 	}
 	defer resp.Body.Close()
 	body2, _ := io.ReadAll(resp.Body)
@@ -314,6 +336,15 @@ func (s *Safeline) postJSON(ctx context.Context, u string, body any) (string, er
 		return "", fmt.Errorf("safeline: api err: %v", parsed.Err)
 	}
 	return string(parsed.Data), nil
+}
+
+// wrapTransportErr maps SSH authentication failures to ErrAuth so the
+// runner reports them distinctly from ordinary network failures.
+func wrapTransportErr(err error) error {
+	if errors.Is(err, sshtunnel.ErrAuth) {
+		return fmt.Errorf("%w: %v", destination.ErrAuth, err)
+	}
+	return fmt.Errorf("%w: %v", destination.ErrNetwork, err)
 }
 
 func classifyHTTP(code int, body []byte) error {
@@ -338,3 +369,4 @@ func fingerprint(pem []byte) string {
 }
 
 var _ destination.Destination = (*Safeline)(nil)
+var _ io.Closer = (*Safeline)(nil)

@@ -183,3 +183,25 @@ func (b *blockingDest) Deploy(ctx context.Context, c cert.CertBundle, hint strin
 	return destination.DeployResult{}, ctx.Err()
 }
 func (b *blockingDest) Validate(ctx context.Context) error { return nil }
+
+type closerDest struct {
+	fakeDest
+	closed bool
+}
+
+func (c *closerDest) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestRun_ClosesDestinations(t *testing.T) {
+	d := &closerDest{fakeDest: fakeDest{name: "a"}}
+	items := []NamedDest{{Cfg: config.DestinationConfig{Name: "a"}, Dest: d}}
+	r := New(items, newState(t), 1)
+	if code := r.Run(context.Background(), makeBundle()); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !d.closed {
+		t.Error("destination was not closed after Run")
+	}
+}

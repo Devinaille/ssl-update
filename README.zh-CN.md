@@ -57,7 +57,7 @@ acme.sh 续期 cert → 写 cert/key 到磁盘
 | 🔌 **插件式** | 每个推送目标实现 `destination.Destination` 接口，init() 自注册到全局 registry |
 | 📌 **有状态** | 记录上次推送成功的 cert id；续期时按 id 覆盖，不创建重复条目 |
 | ⚖️ **per-destination 失败策略** | `required: true` 失败 → 整体 exit 1；`required: false` 失败 → 仅告警 |
-| 🪶 **零外部依赖** | 不引入阿里云官方 SDK（手写 v3 签名 ~100 行）；只有 cobra + yaml.v3 + mapstructure |
+| 🪶 **轻量依赖** | 不引入阿里云官方 SDK（手写 v3 签名 ~100 行）；只有 cobra + yaml.v3 + mapstructure + x/crypto（SSH 隧道） |
 | 🐧 **Linux 专一** | 没有 Windows / macOS 兼容代码，文件路径都是 Linux 风格 |
 | 🧪 **可测试** | 单元测试 + httptest mock，不依赖真机就能跑全套 |
 | 📜 **spec 驱动** | 设计与计划文档化在 `docs/superpowers/` 下 |
@@ -71,7 +71,7 @@ acme.sh 续期 cert → 写 cert/key 到磁盘
 | OS | Linux（amd64 / arm64）|
 | Go（仅构建时） | 1.22+ |
 | 运行依赖 | 仅 libc |
-| 网络 | 出站 HTTPS 到 WAF / 阿里云 |
+| 网络 | 出站 HTTPS 到 WAF / 阿里云；配置 `ssh_tunnel` 时还需出站 SSH（默认 22）到跳板机 |
 | 权限 | 普通用户即可；日志写 `/var/log` 需要 `adm` 组或 root |
 
 ---
@@ -224,6 +224,38 @@ log:
 | `api_token` | ✅ | 在 WAF 控制台"个人中心 → OPEN API"生成 |
 | `cert_name` | | 留空 = 主域名 sanitize 后（`*.a.com` → `wildcard-a-com`） |
 | `verify_tls` | | 自签证书设 `false` |
+| `ssh_tunnel` | | 可选：经 SSH 跳板机访问 API，见下 |
+
+##### SSH 隧道（可选）
+
+如果 Safeline 部署在阿里云 ECS，管理 API 只在 VPC / 本机可达，可以配置
+`ssh_tunnel`。工具会在第一次 HTTP 请求时自动建立 SSH 连接并通过它转发请求
+（等价于 `ssh -L`，但不占本地端口、不需要手动开隧道），运行结束后自动关闭。
+
+```yaml
+- name: prod-safeline
+  type: safeline
+  config:
+    api_url: https://127.0.0.1:9443   # Safeline 只监听本机时
+    api_token: REPLACE_ME
+    verify_tls: false
+    ssh_tunnel:
+      host: 47.100.x.x                # ECS 公网 IP / SSH 跳板
+      port: 22
+      user: ubuntu
+      private_key_file: /etc/ssl-update/aliyun.pem
+      # target: 127.0.0.1:9443        # 默认取 api_url 的 host:port
+      # known_hosts_file: ~/.ssh/known_hosts
+      # insecure_ignore_host_key: false
+```
+
+- `target` 默认使用 `api_url` 的 `host:port`。若 `api_url` 写的是私网地址但
+  Safeline 只监听 loopback，把它设为 `127.0.0.1:9443`。
+- 默认用 `~/.ssh/known_hosts` 校验跳板机主机密钥。首次可先
+  `ssh-keyscan -p 22 <host> >> ~/.ssh/known_hosts`，或临时设置
+  `insecure_ignore_host_key: true`（有 MITM 风险，不推荐）。
+- `private_key_file` 必须是未加密私钥（阿里云 `.pem` 默认如此）；暂不支持
+  passphrase。
 
 #### 阿里云 ESA（aliyun_esa）
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"time"
 
@@ -43,6 +44,11 @@ func runValidate(ctx context.Context, cfgPath string, timeout time.Duration) err
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		err = dest.Validate(cctx)
 		cancel()
+		if c, ok := dest.(io.Closer); ok {
+			if cerr := c.Close(); cerr != nil {
+				slog.Debug("close destination", "dest", d.Name, "err", cerr.Error())
+			}
+		}
 		if err != nil {
 			slog.Error("[FAIL] validate", "dest", d.Name, "err", err.Error())
 			if d.Required {

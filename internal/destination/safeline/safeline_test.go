@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"ssl-update/internal/cert"
+	"ssl-update/internal/destination"
+	"ssl-update/internal/sshtunnel/sshtest"
 )
 
 func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *Safeline) {
@@ -462,5 +465,62 @@ func TestNew_VerifyTLS_True_RejectsBadCert(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "x509") && !strings.Contains(err.Error(), "tls:") {
 		t.Errorf("expected TLS-related error, got: %v", err)
+	}
+}
+
+func TestNew_SSHTunnelMissingKeyFile(t *testing.T) {
+	_, err := New("x", map[string]any{
+		"api_url":   "https://127.0.0.1:1",
+		"api_token": "tok",
+		"ssh_tunnel": map[string]any{
+			"host":             "127.0.0.1",
+			"user":             "tester",
+			"private_key_file": "/nonexistent/id_ed25519",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for missing ssh private key, got nil")
+	}
+	if !errors.Is(err, destination.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}
+
+// TestValidate_ThroughSSHTunnel proves the HTTP request actually goes
+// through SSH: api_url points at an unreachable local port, while the
+// tunnel target points at the httptest server.
+func TestValidate_ThroughSSHTunnel(t *testing.T) {
+	srv := sshtest.Start(t)
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/open/cert" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.Write([]byte(`{"data":{"nodes":[],"total":0},"err":null}`))
+	}))
+	defer ts.Close()
+
+	sIface, err := New("test-dest", map[string]any{
+		"api_url":    "https://127.0.0.1:1",
+		"api_token":  "tok",
+		"verify_tls": false,
+		"ssh_tunnel": map[string]any{
+			"host":             srv.Host,
+			"port":             srv.Port,
+			"user":             "tester",
+			"private_key_file": srv.PrivateKeyFile,
+			"known_hosts_file": srv.KnownHostsFile,
+			"target":           strings.TrimPrefix(ts.URL, "https://"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sIface.(*Safeline)
+	t.Cleanup(func() { s.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Validate(ctx); err != nil {
+		t.Fatalf("Validate through SSH tunnel: %v", err)
 	}
 }
